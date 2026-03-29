@@ -214,6 +214,9 @@ binaries: limactl helpers limactl-plugins guestagents \
 # _output/bin
 .PHONY: limactl lima helpers
 limactl: _output/bin/limactl$(exe) lima
+ifeq ($(GOOS),darwin)
+limactl: app-bundle
+endif
 
 ### Listing Dependencies
 
@@ -310,6 +313,20 @@ endif
 	$(ENVS_$@) $(GO_BUILD) -tags '$(GO_BUILDTAGS_LIMACTL)' -o $@ ./cmd/limactl
 ifeq ($(GOOS),darwin)
 	codesign -f -v --entitlements vz.entitlements -s - $@
+endif
+
+ifeq ($(GOOS),darwin)
+LIMA_APP_BUNDLE := _output/share/lima/Lima.app
+
+$(LIMA_APP_BUNDLE): _output/bin/limactl$(exe) pkg/driver/vz/Info.plist vz.entitlements
+	@rm -rf $@
+	@mkdir -p $@/Contents/MacOS
+	cp _output/bin/limactl$(exe) $@/Contents/MacOS/limactl
+	cp pkg/driver/vz/Info.plist $@/Contents/Info.plist
+	codesign -f -v --entitlements vz.entitlements -s - $@
+
+.PHONY: app-bundle
+app-bundle: $(LIMA_APP_BUNDLE)
 endif
 
 LIBEXEC_LIMA := _output/libexec/lima

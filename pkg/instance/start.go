@@ -218,9 +218,22 @@ func StartWithPaths(ctx context.Context, inst *limatype.Instance, launchHostAgen
 			"hostagent",
 			"--pidfile", haPIDPath,
 			"--socket", haSockPath)
-		if prepared.Driver.Info().Features.CanRunGUI {
+
+		driverInfo := prepared.Driver.Info()
+		runGUI := driverInfo.Features.CanRunGUI
+		useAppBundle := false
+		if !runGUI && driverInfo.Features.WantsGUI {
+			if bundlePath := findAppBundle(); bundlePath != "" {
+				runGUI = true
+				useAppBundle = true
+			} else {
+				logrus.Warn("macOS 26+ requires Lima.app for VM display window; running headless (use SSH to access the VM)")
+			}
+		}
+		if runGUI {
 			args = append(args, "--run-gui")
 		}
+
 		if prepared.GuestAgent != "" {
 			args = append(args, "--guestagent", prepared.GuestAgent)
 		}
@@ -231,23 +244,36 @@ func StartWithPaths(ctx context.Context, inst *limatype.Instance, launchHostAgen
 			args = append(args, "--progress")
 		}
 		args = append(args, inst.Name)
-		haCmd = exec.CommandContext(ctx, limactl, args...)
 
-		haCmd.SysProcAttr = executil.BackgroundSysProcAttr
-
-		haCmd.Stdout = haStdoutW
-		haCmd.Stderr = haStderrW
-
-		if launchHostAgentForeground {
-			if isRegisteredToAutoStart {
-				logrus.Warn("The instance is registered to start at login, but the --foreground option was given, so starting the instance directly")
-			}
-			haCmd.SysProcAttr = executil.ForegroundSysProcAttr
-			if err := execHostAgentForeground(limactl, haCmd); err != nil {
+		if useAppBundle {
+			bundlePath := findAppBundle()
+			_, err = launchHostAgentInAppBundle(bundlePath, args, haStdoutPath, haStderrPath)
+			if err != nil {
 				return err
 			}
-		} else if err := haCmd.Start(); err != nil {
-			return err
+			// Don't track the `open` process — it exits immediately for
+			// LSUIElement (agent) apps. The hostagent runs as a separate
+			// process and is monitored via its PID file instead.
+			haCmd = nil
+		} else {
+			haCmd = exec.CommandContext(ctx, limactl, args...)
+
+			haCmd.SysProcAttr = executil.BackgroundSysProcAttr
+
+			haCmd.Stdout = haStdoutW
+			haCmd.Stderr = haStderrW
+
+			if launchHostAgentForeground {
+				if isRegisteredToAutoStart {
+					logrus.Warn("The instance is registered to start at login, but the --foreground option was given, so starting the instance directly")
+				}
+				haCmd.SysProcAttr = executil.ForegroundSysProcAttr
+				if err := execHostAgentForeground(limactl, haCmd); err != nil {
+					return err
+				}
+			} else if err := haCmd.Start(); err != nil {
+				return err
+			}
 		}
 	} else if err = autostart.RequestStart(ctx, inst); err != nil {
 		return fmt.Errorf("failed to request start via autostart manager: %w", err)

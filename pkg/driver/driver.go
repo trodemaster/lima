@@ -117,6 +117,7 @@ type Info struct {
 
 type DriverFeatures struct {
 	CanRunGUI            bool `json:"canRunGui,omitempty"`
+	WantsGUI             bool `json:"wantsGui,omitempty"`
 	DynamicSSHAddress    bool `json:"dynamicSSHAddress"`
 	StaticSSHPort        bool `json:"staticSSHPort"`
 	SkipSocketForwarding bool `json:"skipSocketForwarding"`

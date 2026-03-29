@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"runtime"
 	"time"
 
@@ -460,6 +461,31 @@ func (l *LimaVzDriver) Start(ctx context.Context) (chan error, error) {
 func (l *LimaVzDriver) canRunGUI() bool {
 	switch *l.Instance.Config.Video.Display {
 	case "vz", "default":
+		ver, err := osutil.ProductVersion()
+		if err == nil && ver.Major >= 26 {
+			if isRunningInAppBundle() {
+				return true
+			}
+			logrus.Debug("Skipping GUI on macOS 26+ (no app bundle; use --foreground with Lima.app or SSH)")
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func isRunningInAppBundle() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(exe, ".app/Contents/MacOS/")
+}
+
+func (l *LimaVzDriver) wantsGUI() bool {
+	switch *l.Instance.Config.Video.Display {
+	case "vz", "default":
 		return true
 	default:
 		return false
@@ -546,14 +572,16 @@ func (l *LimaVzDriver) Info() driver.Info {
 		info.InstanceDir = l.Instance.Dir
 	}
 
-	var guiFlag bool
+	var guiFlag, wantsGUIFlag bool
 	if l.Instance != nil {
 		guiFlag = l.canRunGUI()
+		wantsGUIFlag = l.wantsGUI()
 	}
 	info.Features = driver.DriverFeatures{
 		DynamicSSHAddress:    false,
 		SkipSocketForwarding: false,
 		CanRunGUI:            guiFlag,
+		WantsGUI:             wantsGUIFlag,
 		RosettaEnabled:       l.rosettaEnabled,
 		RosettaBinFmt:        l.rosettaBinFmt,
 	}
