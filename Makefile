@@ -316,7 +316,10 @@ ifeq ($(GOOS),darwin)
 endif
 
 ifeq ($(GOOS),darwin)
-LIMA_APP_BUNDLE := _output/share/lima/Lima.app
+# APP_BUNDLE_DIR: Directory for GUI app bundle (default: _output/share/lima)
+# Can be overridden during build, e.g.: make limactl APP_BUNDLE_DIR=/usr/local/share/lima
+APP_BUNDLE_DIR ?= _output/share/lima
+LIMA_APP_BUNDLE := $(APP_BUNDLE_DIR)/Lima.app
 
 $(LIMA_APP_BUNDLE): _output/bin/limactl$(exe) pkg/driver/vz/Info.plist vz.entitlements
 	@rm -rf $@
