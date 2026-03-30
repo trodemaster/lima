@@ -19,23 +19,28 @@ import (
 const appBundleName = "Lima.app"
 
 func findAppBundle() string {
-	// Search in multiple locations:
-	// 1. Standard Lima share directories (dev/installed via brew, etc)
-	// 2. MacPorts default prefix: /usr/local
-	// 3. MacPorts alternate prefix: /opt/local (common on macOS with Xcode)
-	searchPaths := []string{}
-	
-	// Add ShareLima() paths (includes debug workspace and system prefixes)
+	// Search for Lima.app in order of precedence:
+	// 1. Standard macOS Applications directory (highest priority)
+	// 2. ShareLima() paths derived from the running binary's prefix
+	// 3. Explicit prefix share/lima fallbacks
+	var searchPaths []string
+
+	// Standard macOS Applications location
+	searchPaths = append(searchPaths,
+		"/Applications",
+	)
+
+	// Paths relative to the running binary (covers dev builds, Homebrew, etc.)
 	if dirs, err := usrlocal.ShareLima(); err == nil {
 		searchPaths = append(searchPaths, dirs...)
 	}
-	
-	// Add standard macports locations
-	searchPaths = append(searchPaths, []string{
-		"/usr/local/share/lima",
+
+	// Explicit prefix share/lima paths as a final fallback
+	searchPaths = append(searchPaths,
 		"/opt/local/share/lima",
-	}...)
-	
+		"/usr/local/share/lima",
+	)
+
 	for _, dir := range searchPaths {
 		bundle := filepath.Join(dir, appBundleName)
 		info, err := os.Stat(filepath.Join(bundle, "Contents", "Info.plist"))
