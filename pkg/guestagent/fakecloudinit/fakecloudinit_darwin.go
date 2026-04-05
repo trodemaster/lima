@@ -239,13 +239,31 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 		logrus.WithError(err).Warnf("Failed to chown Preferences dir %q", prefsDir)
 	}
 
+	// Fetch current OS build and product version — macOS uses LastPreLoginTasksPerformedBuild
+	// to determine whether to show express-settings dialogs (MiniBuddyLaunchReason=13).
+	// If the stored build matches the running build, mini-buddy considers setup complete.
+	buildVersion := "unknown"
+	if out, err := exec.Command("sw_vers", "-buildVersion").Output(); err == nil {
+		buildVersion = strings.TrimSpace(string(out))
+	} else {
+		logrus.WithError(err).Warn("Failed to get build version from sw_vers")
+	}
+	productVersion := "unknown"
+	if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+		productVersion = strings.TrimSpace(string(out))
+	} else {
+		logrus.WithError(err).Warn("Failed to get product version from sw_vers")
+	}
+
 	// Per-user SetupAssistant plist — mark every first-login pane as already seen.
 	// SkipExpressSettingsUpdating suppresses the express-settings prompt.
 	// SkipFirstLoginOptimization skips the first-login Spotlight indexing pass.
-	// MiniBuddyLaunchReason 0 ensures mini-buddy has no scheduled pane to show;
-	// without this, macOS may set it to 13 (SoftwareUpdate) on first login and
-	// resume showing the "Update Mac Automatically" prompt on subsequent boots.
-	const setupAssistantPlist = `<?xml version="1.0" encoding="UTF-8"?>
+	// MiniBuddyLaunchReason 0 + MiniBuddyShouldLaunchToResumeSetup false ensures
+	// mini-buddy does not resume any pending pane on first login.
+	// The LastPreLoginTasksPerformedBuild / *Version and LastSeen* version stamps
+	// are what macOS actually checks to decide whether setup is already complete;
+	// without them macOS resets MiniBuddyLaunchReason to 13 on first GUI login.
+	setupAssistantPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -265,13 +283,20 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 	<key>DidSeeTermsOfAddress</key><true/>
 	<key>DidSeeTouchIDSetup</key><true/>
 	<key>DidSeeiCloudLoginForStorageServices</key><true/>
+	<key>LastPreLoginTasksPerformedBuild</key><string>%s</string>
+	<key>LastPreLoginTasksPerformedVersion</key><string>%s</string>
+	<key>LastSeenAgeRangeSelectionProductVersion</key><string>%s</string>
+	<key>LastSeenBuddyBuildVersion</key><string>%s</string>
+	<key>LastSeenCloudProductVersion</key><string>%s</string>
+	<key>LastSeenDiagnosticsProductVersion</key><string>%s</string>
 	<key>MiniBuddyLaunchReason</key><integer>0</integer>
 	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
 	<key>SkipExpressSettingsUpdating</key><true/>
 	<key>SkipFirstLoginOptimization</key><true/>
 </dict>
 </plist>
-`
+`, buildVersion, productVersion, productVersion, buildVersion, productVersion, productVersion)
+
 	saPlist := filepath.Join(prefsDir, "com.apple.SetupAssistant.plist")
 	if err := os.WriteFile(saPlist, []byte(setupAssistantPlist), 0o600); err != nil {
 		return fmt.Errorf("failed to write SetupAssistant plist %q: %w", saPlist, err)
@@ -287,10 +312,13 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 	// the plist with its own runtime keys on first boot.
 	// AutomaticCheckEnabled is true (so softwareupdated runs checks) but automatic
 	// download/install of macOS updates is disabled to prevent unexpected OS upgrades.
+	// ConfigDataInstall signals to mini-buddy that the user has made an update-policy
+	// choice; without it the "Update Mac Automatically" pane is shown regardless.
 	swPrefs := [][]string{
 		{"AutomaticCheckEnabled", "-bool", "true"},
 		{"AutomaticDownload", "-bool", "false"},
 		{"AutomaticallyInstallMacOSUpdates", "-bool", "false"},
+		{"ConfigDataInstall", "-bool", "true"},
 		{"CriticalUpdateInstall", "-bool", "false"},
 	}
 	for _, pref := range swPrefs {
@@ -302,7 +330,8 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 		}
 	}
 
-	logrus.Infof("Suppressed first-login setup screens for uid %d in %q", uid, homedir)
+	logrus.Infof("Suppressed first-login setup screens for uid %d in %q (build=%s, version=%s)",
+		uid, homedir, buildVersion, productVersion)
 	return nil
 }
 
