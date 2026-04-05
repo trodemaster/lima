@@ -219,6 +219,87 @@ func populateHomeDir(ctx context.Context, uid int, homedir string) error {
 	return nil
 }
 
+// suppressFirstLoginScreens writes preference plists into the user's home
+// directory immediately after home creation, while running as a root
+// LaunchDaemon — before any GUI session starts. cfprefsd reads these files
+// fresh at first login so macOS does not get a chance to reset them.
+//
+// Two plists are written:
+//   - ~/Library/Preferences/com.apple.SetupAssistant.plist  (per-user, chowned to uid)
+//     Marks all first-login wizard panes as already seen.
+//   - /Library/Preferences/com.apple.SoftwareUpdate.plist   (system-wide, root:wheel)
+//     Pre-configures automatic-update settings so the "Update Mac Automatically"
+//     dialog does not appear on first login.
+func suppressFirstLoginScreens(uid int, homedir string) error {
+	prefsDir := filepath.Join(homedir, "Library/Preferences")
+	if err := os.MkdirAll(prefsDir, 0o700); err != nil {
+		return fmt.Errorf("failed to create Preferences dir %q: %w", prefsDir, err)
+	}
+	if err := os.Chown(prefsDir, uid, -1); err != nil {
+		logrus.WithError(err).Warnf("Failed to chown Preferences dir %q", prefsDir)
+	}
+
+	// Per-user SetupAssistant plist — mark every first-login pane as already seen.
+	// SkipExpressSettingsUpdating suppresses the express-settings prompt.
+	// SkipFirstLoginOptimization skips the first-login Spotlight indexing pass.
+	const setupAssistantPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>DidSeeAccessibility</key><true/>
+	<key>DidSeeActivationLock</key><true/>
+	<key>DidSeeAppStore</key><true/>
+	<key>DidSeeAppearanceSetup</key><true/>
+	<key>DidSeeApplePaySetup</key><true/>
+	<key>DidSeeCloudSetup</key><true/>
+	<key>DidSeeLockdownMode</key><true/>
+	<key>DidSeePrivacy</key><true/>
+	<key>DidSeeScreenTime</key><true/>
+	<key>DidSeeSetupSequence</key><true/>
+	<key>DidSeeSiriSetup</key><true/>
+	<key>DidSeeSyncSetup</key><true/>
+	<key>DidSeeSyncSetup2</key><true/>
+	<key>DidSeeTermsOfAddress</key><true/>
+	<key>DidSeeTouchIDSetup</key><true/>
+	<key>DidSeeiCloudLoginForStorageServices</key><true/>
+	<key>SkipExpressSettingsUpdating</key><true/>
+	<key>SkipFirstLoginOptimization</key><true/>
+</dict>
+</plist>
+`
+	saPlist := filepath.Join(prefsDir, "com.apple.SetupAssistant.plist")
+	if err := os.WriteFile(saPlist, []byte(setupAssistantPlist), 0o600); err != nil {
+		return fmt.Errorf("failed to write SetupAssistant plist %q: %w", saPlist, err)
+	}
+	if err := os.Chown(saPlist, uid, -1); err != nil {
+		logrus.WithError(err).Warnf("Failed to chown SetupAssistant plist %q", saPlist)
+	}
+
+	// System-wide SoftwareUpdate plist — pre-configure update settings so the
+	// "Update Mac Automatically" dialog is skipped on first login.
+	// AutomaticCheckEnabled is true (so softwareupdated runs checks) but automatic
+	// download/install of macOS updates is disabled to prevent unexpected OS upgrades.
+	const softwareUpdatePlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AutomaticCheckEnabled</key><true/>
+	<key>AutomaticDownload</key><false/>
+	<key>AutomaticallyInstallMacOSUpdates</key><false/>
+	<key>CriticalUpdateInstall</key><false/>
+</dict>
+</plist>
+`
+	swPlist := "/Library/Preferences/com.apple.SoftwareUpdate.plist"
+	if err := os.WriteFile(swPlist, []byte(softwareUpdatePlist), 0o644); err != nil {
+		// Non-fatal: the dialog is annoying but does not block VM operation.
+		logrus.WithError(err).Warnf("Failed to write SoftwareUpdate plist %q", swPlist)
+	}
+
+	logrus.Infof("Suppressed first-login setup screens for uid %d in %q", uid, homedir)
+	return nil
+}
+
 func createUser(ctx context.Context, u *cloudinittypes.User) error {
 	homedir := u.Homedir
 	if homedir == "" {
@@ -279,6 +360,13 @@ func createUser(ctx context.Context, u *cloudinittypes.User) error {
 	// sysadminctl does not create the custom home directory
 	if err = populateHomeDir(ctx, uid, homedir); err != nil {
 		return fmt.Errorf("failed to populate home directory for user %#q: %w", u.Name, err)
+	}
+
+	// Write first-login preference plists now, as root, before any GUI session starts.
+	// cfprefsd reads these fresh at first login so macOS does not reset them.
+	if err = suppressFirstLoginScreens(uid, homedir); err != nil {
+		// Non-fatal: SSH provisioning (configure.sh) can still handle it if needed.
+		logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %q", u.Name)
 	}
 
 	cmd = exec.CommandContext(ctx, "chmod", "700", homedir)
