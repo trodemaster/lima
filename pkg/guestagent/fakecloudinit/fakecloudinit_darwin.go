@@ -242,6 +242,9 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 	// Per-user SetupAssistant plist — mark every first-login pane as already seen.
 	// SkipExpressSettingsUpdating suppresses the express-settings prompt.
 	// SkipFirstLoginOptimization skips the first-login Spotlight indexing pass.
+	// MiniBuddyLaunchReason 0 ensures mini-buddy has no scheduled pane to show;
+	// without this, macOS may set it to 13 (SoftwareUpdate) on first login and
+	// resume showing the "Update Mac Automatically" prompt on subsequent boots.
 	const setupAssistantPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -262,6 +265,8 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 	<key>DidSeeTermsOfAddress</key><true/>
 	<key>DidSeeTouchIDSetup</key><true/>
 	<key>DidSeeiCloudLoginForStorageServices</key><true/>
+	<key>MiniBuddyLaunchReason</key><integer>0</integer>
+	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
 	<key>SkipExpressSettingsUpdating</key><true/>
 	<key>SkipFirstLoginOptimization</key><true/>
 </dict>
@@ -275,25 +280,26 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 		logrus.WithError(err).Warnf("Failed to chown SetupAssistant plist %q", saPlist)
 	}
 
-	// System-wide SoftwareUpdate plist — pre-configure update settings so the
+	// System-wide SoftwareUpdate preferences — pre-configure update settings so the
 	// "Update Mac Automatically" dialog is skipped on first login.
+	// Using 'defaults write' (via exec) rather than os.WriteFile so that cfprefsd
+	// owns the domain; raw file writes get overwritten when softwareupdated rewrites
+	// the plist with its own runtime keys on first boot.
 	// AutomaticCheckEnabled is true (so softwareupdated runs checks) but automatic
 	// download/install of macOS updates is disabled to prevent unexpected OS upgrades.
-	const softwareUpdatePlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AutomaticCheckEnabled</key><true/>
-	<key>AutomaticDownload</key><false/>
-	<key>AutomaticallyInstallMacOSUpdates</key><false/>
-	<key>CriticalUpdateInstall</key><false/>
-</dict>
-</plist>
-`
-	swPlist := "/Library/Preferences/com.apple.SoftwareUpdate.plist"
-	if err := os.WriteFile(swPlist, []byte(softwareUpdatePlist), 0o644); err != nil {
-		// Non-fatal: the dialog is annoying but does not block VM operation.
-		logrus.WithError(err).Warnf("Failed to write SoftwareUpdate plist %q", swPlist)
+	swPrefs := [][]string{
+		{"AutomaticCheckEnabled", "-bool", "true"},
+		{"AutomaticDownload", "-bool", "false"},
+		{"AutomaticallyInstallMacOSUpdates", "-bool", "false"},
+		{"CriticalUpdateInstall", "-bool", "false"},
+	}
+	for _, pref := range swPrefs {
+		args := append([]string{"write", "/Library/Preferences/com.apple.SoftwareUpdate"}, pref...)
+		cmd := exec.Command("defaults", args...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			// Non-fatal: the dialog is annoying but does not block VM operation.
+			logrus.WithError(err).Warnf("Failed to set SoftwareUpdate pref %v (output=%q)", pref[0], output)
+		}
 	}
 
 	logrus.Infof("Suppressed first-login setup screens for uid %d in %q", uid, homedir)
