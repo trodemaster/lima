@@ -22,7 +22,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/lima-vm/lima/v2/pkg/cidata/cloudinittypes"
-	"github.com/lima-vm/lima/v2/pkg/osutil"
 )
 
 func Run(ctx context.Context) error {
@@ -340,8 +339,11 @@ func createUser(ctx context.Context, u *cloudinittypes.User) error {
 	if homedir == "" {
 		return fmt.Errorf("homedir is required for user %#q", u.Name)
 	}
-	if osutil.FileExists(homedir) {
-		logrus.Debugf("homedir %#q already exists, skipping user creation for user %#q", homedir, u.Name)
+	// Check OpenDirectory rather than the filesystem: disk patching may pre-create
+	// the home directory tree (e.g. for per-user TCC database setup) before first boot,
+	// which would cause a filesystem-existence check to skip user account creation.
+	if cmd := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+u.Name, "RecordName"); cmd.Run() == nil {
+		logrus.Debugf("user %q already exists in directory services, skipping creation", u.Name)
 		return nil
 	}
 	if u.UID == "" {
