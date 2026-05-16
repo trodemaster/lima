@@ -97,6 +97,7 @@ type LimaVzDriver struct {
 	rosettaEnabled  bool
 	rosettaBinFmt   bool
 	diskImageFormat image.Type
+	guestPatch      limatype.VZGuestPatch
 
 	machine                    *virtualMachineWrapper
 	waitSSHLocalPortAccessible <-chan any
@@ -161,6 +162,7 @@ func (l *LimaVzDriver) Configure(_ context.Context, inst *limatype.Instance) (*d
 	} else {
 		l.diskImageFormat = raw.Type
 	}
+	l.guestPatch = vzOpts.GuestPatch
 
 	return &driver.ConfiguredDriver{
 		Driver: l,
@@ -413,7 +415,7 @@ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
 		patchedMarker := disk + ".patched" // empty file
 		if !osutil.FileExists(patchedMarker) {
 			logrus.Infof("Patching macOS disk %#q", disk)
-			if err := macos.Patch(ctx, disk); err != nil {
+			if err := macos.Patch(ctx, disk, l.guestPatch.TCCPermissions); err != nil {
 				return err
 			}
 			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
