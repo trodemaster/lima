@@ -125,8 +125,23 @@ type QEMUOpts struct {
 }
 
 type VZOpts struct {
-	Rosetta         Rosetta     `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
-	DiskImageFormat *image.Type `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	Rosetta         Rosetta      `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
+	DiskImageFormat *image.Type  `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	GuestPatch      VZGuestPatch `yaml:"guestPatch,omitempty" json:"guestPatch,omitempty"`
+}
+
+type VZGuestPatch struct {
+	TCCPermissions []TCCPermission `yaml:"tccPermissions,omitempty" json:"tccPermissions,omitempty" jsonschema:"nullable"`
+}
+
+// TCCPermission adds one entry to the guest's system TCC database during disk patching.
+// Set Preset to a built-in name, or set Service/Client/ClientType/AuthValue for a custom entry.
+type TCCPermission struct {
+	Preset     string `yaml:"preset,omitempty" json:"preset,omitempty"`
+	Service    string `yaml:"service,omitempty" json:"service,omitempty"`
+	Client     string `yaml:"client,omitempty" json:"client,omitempty"`
+	ClientType string `yaml:"clientType,omitempty" json:"clientType,omitempty"` // "bundle" or "path"
+	AuthValue  string `yaml:"authValue,omitempty" json:"authValue,omitempty"`   // "allow" (default) or "deny"
 }
 
 type Rosetta struct {
