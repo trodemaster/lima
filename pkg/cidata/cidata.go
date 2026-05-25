@@ -153,7 +153,17 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 			if err := limayaml.Convert(instConfig.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
 				return false
 			}
-			return vzOpts.SuppressFirstLoginSetup != nil && *vzOpts.SuppressFirstLoginSetup
+			return vzOpts.SuppressFirstLoginSetup != nil
+		}(),
+		SuppressFirstLoginSetupPlist: func() string {
+			var vzOpts limatype.VZOpts
+			if err := limayaml.Convert(instConfig.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+				return ""
+			}
+			if vzOpts.SuppressFirstLoginSetup == nil {
+				return ""
+			}
+			return vzOpts.SuppressFirstLoginSetup.Plist
 		}(),
 		Param:          instConfig.Param,
 		LegacyBIOS:     *instConfig.Firmware.LegacyBIOS,
@@ -413,6 +423,13 @@ func GenerateISO9660(ctx context.Context, drv driver.Driver, instDir, name strin
 	layout, err := ExecuteTemplateCIDataISO(args)
 	if err != nil {
 		return "", err
+	}
+
+	if args.SuppressFirstLoginSetupPlist != "" {
+		layout = append(layout, iso9660util.Entry{
+			Path:   "setup-assistant.plist",
+			Reader: strings.NewReader(args.SuppressFirstLoginSetupPlist),
+		})
 	}
 
 	driverScripts, err := drv.BootScripts(ctx)

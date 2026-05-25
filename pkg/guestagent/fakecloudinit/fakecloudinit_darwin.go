@@ -116,7 +116,7 @@ func processUserData(ctx context.Context, mnt string) error {
 		}
 	}
 	for _, u := range userData.Users {
-		if err := createUser(ctx, &u, userData.SuppressFirstLoginSetup); err != nil {
+		if err := createUser(ctx, &u, userData.SuppressFirstLoginSetup, mnt); err != nil {
 			errs = append(errs, fmt.Errorf("failed to create user %q: %w", u.Name, err))
 		}
 	}
@@ -229,7 +229,10 @@ func populateHomeDir(ctx context.Context, uid int, homedir string) error {
 //   - /Library/Preferences/com.apple.SoftwareUpdate.plist   (system-wide, root:wheel)
 //     Pre-configures automatic-update settings so the "Update Mac Automatically"
 //     dialog does not appear on first login.
-func suppressFirstLoginScreens(uid int, homedir string) error {
+//
+// If mnt/setup-assistant.plist exists on the cidata volume it is used verbatim
+// instead of the built-in template, allowing the caller to supply version-specific keys.
+func suppressFirstLoginScreens(mnt string, uid int, homedir string) error {
 	prefsDir := filepath.Join(homedir, "Library/Preferences")
 	if err := os.MkdirAll(prefsDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create Preferences dir %q: %w", prefsDir, err)
@@ -238,31 +241,42 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 		logrus.WithError(err).Warnf("Failed to chown Preferences dir %q", prefsDir)
 	}
 
-	// Fetch current OS build and product version — macOS uses LastPreLoginTasksPerformedBuild
-	// to determine whether to show express-settings dialogs (MiniBuddyLaunchReason=13).
-	// If the stored build matches the running build, mini-buddy considers setup complete.
-	buildVersion := "unknown"
-	if out, err := exec.Command("sw_vers", "-buildVersion").Output(); err == nil {
-		buildVersion = strings.TrimSpace(string(out))
-	} else {
-		logrus.WithError(err).Warn("Failed to get build version from sw_vers")
+	// Use a custom plist from the cidata volume if provided, otherwise fall back
+	// to the built-in template which stamps version/build info to prevent macOS
+	// from resetting MiniBuddyLaunchReason to 13 on first GUI login.
+	var setupAssistantPlist string
+	if customPlistPath := filepath.Join(mnt, "setup-assistant.plist"); mnt != "" {
+		if data, err := os.ReadFile(customPlistPath); err == nil {
+			setupAssistantPlist = string(data)
+			logrus.Infof("Using custom SetupAssistant plist from %q", customPlistPath)
+		}
 	}
-	productVersion := "unknown"
-	if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
-		productVersion = strings.TrimSpace(string(out))
-	} else {
-		logrus.WithError(err).Warn("Failed to get product version from sw_vers")
-	}
+	if setupAssistantPlist == "" {
+		// Fetch current OS build and product version — macOS uses LastPreLoginTasksPerformedBuild
+		// to determine whether to show express-settings dialogs (MiniBuddyLaunchReason=13).
+		// If the stored build matches the running build, mini-buddy considers setup complete.
+		buildVersion := "unknown"
+		if out, err := exec.Command("sw_vers", "-buildVersion").Output(); err == nil {
+			buildVersion = strings.TrimSpace(string(out))
+		} else {
+			logrus.WithError(err).Warn("Failed to get build version from sw_vers")
+		}
+		productVersion := "unknown"
+		if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+			productVersion = strings.TrimSpace(string(out))
+		} else {
+			logrus.WithError(err).Warn("Failed to get product version from sw_vers")
+		}
 
-	// Per-user SetupAssistant plist — mark every first-login pane as already seen.
-	// SkipExpressSettingsUpdating suppresses the express-settings prompt.
-	// SkipFirstLoginOptimization skips the first-login Spotlight indexing pass.
-	// MiniBuddyLaunchReason 0 + MiniBuddyShouldLaunchToResumeSetup false ensures
-	// mini-buddy does not resume any pending pane on first login.
-	// The LastPreLoginTasksPerformedBuild / *Version and LastSeen* version stamps
-	// are what macOS actually checks to decide whether setup is already complete;
-	// without them macOS resets MiniBuddyLaunchReason to 13 on first GUI login.
-	setupAssistantPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+		// Per-user SetupAssistant plist — mark every first-login pane as already seen.
+		// SkipExpressSettingsUpdating suppresses the express-settings prompt.
+		// SkipFirstLoginOptimization skips the first-login Spotlight indexing pass.
+		// MiniBuddyLaunchReason 0 + MiniBuddyShouldLaunchToResumeSetup false ensures
+		// mini-buddy does not resume any pending pane on first login.
+		// The LastPreLoginTasksPerformedBuild / *Version and LastSeen* version stamps
+		// are what macOS actually checks to decide whether setup is already complete;
+		// without them macOS resets MiniBuddyLaunchReason to 13 on first GUI login.
+		setupAssistantPlist = fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -295,6 +309,7 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 </dict>
 </plist>
 `, buildVersion, productVersion, productVersion, buildVersion, productVersion, productVersion)
+	}
 
 	saPlist := filepath.Join(prefsDir, "com.apple.SetupAssistant.plist")
 	if err := os.WriteFile(saPlist, []byte(setupAssistantPlist), 0o600); err != nil {
@@ -329,12 +344,11 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 		}
 	}
 
-	logrus.Infof("Suppressed first-login setup screens for uid %d in %q (build=%s, version=%s)",
-		uid, homedir, buildVersion, productVersion)
+	logrus.Infof("Suppressed first-login setup screens for uid %d in %q", uid, homedir)
 	return nil
 }
 
-func createUser(ctx context.Context, u *cloudinittypes.User, suppressFirstLoginSetup bool) error {
+func createUser(ctx context.Context, u *cloudinittypes.User, suppressFirstLoginSetup bool, mnt string) error {
 	homedir := u.Homedir
 	if homedir == "" {
 		return fmt.Errorf("homedir is required for user %#q", u.Name)
@@ -402,7 +416,7 @@ func createUser(ctx context.Context, u *cloudinittypes.User, suppressFirstLoginS
 	if suppressFirstLoginSetup {
 		// Write first-login preference plists now, as root, before any GUI session starts.
 		// cfprefsd reads these fresh at first login so macOS does not reset them.
-		if err = suppressFirstLoginScreens(uid, homedir); err != nil {
+		if err = suppressFirstLoginScreens(mnt, uid, homedir); err != nil {
 			// Non-fatal: SSH provisioning (configure.sh) can still handle it if needed.
 			logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %q", u.Name)
 		}

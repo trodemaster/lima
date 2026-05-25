@@ -124,9 +124,16 @@ type QEMUOpts struct {
 }
 
 type VZOpts struct {
-	Rosetta                  Rosetta     `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
-	DiskImageFormat          *image.Type `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
-	SuppressFirstLoginSetup  *bool       `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
+	Rosetta                  Rosetta                  `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
+	DiskImageFormat          *image.Type              `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	SuppressFirstLoginSetup  *SuppressFirstLoginSetup `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
+}
+
+// SuppressFirstLoginSetup suppresses macOS first-login wizard screens (Darwin guests only).
+// If non-nil, the feature is enabled. Plist overrides the built-in com.apple.SetupAssistant.plist
+// content if non-empty; otherwise the built-in plist is used.
+type SuppressFirstLoginSetup struct {
+	Plist string `yaml:"plist,omitempty" json:"plist,omitempty"`
 }
 
 type Rosetta struct {

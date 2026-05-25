@@ -37,14 +37,14 @@ limactl shell macos cat /Users/${USER}.guest/password
 
 By default, macOS shows a series of setup wizard screens (Setup Assistant /
 mini-buddy) on the first GUI login. For automated or headless-style macOS VMs
-this is inconvenient. Set `vmOpts.vz.suppressFirstLoginSetup: true` to have
-Lima pre-populate the relevant preference plists during provisioning, before
-any GUI session starts, so the setup screens are skipped automatically:
+this is inconvenient. Set `vmOpts.vz.suppressFirstLoginSetup` to have Lima
+pre-populate the relevant preference plists during provisioning, before any GUI
+session starts, so the setup screens are skipped automatically:
 
 ```yaml
 vmOpts:
   vz:
-    suppressFirstLoginSetup: true
+    suppressFirstLoginSetup: {}
 ```
 
 This writes `com.apple.SetupAssistant.plist` into the guest user's home
@@ -53,7 +53,33 @@ that the "Update Mac Automatically" dialog is also suppressed. The preferences
 are written as root (via the Lima guest agent) before first login, so macOS
 reads them as the authoritative initial state and does not reset them.
 
-**Default:** `false` — setup screens are shown as normal.
+**Default:** unset — setup screens are shown as normal.
+
+### Custom plist
+
+The built-in `com.apple.SetupAssistant.plist` content stamps the current OS
+build/version to prevent macOS from resetting the wizard state. If the keys
+that macOS checks change between OS releases, you can supply your own plist:
+
+```yaml
+vmOpts:
+  vz:
+    suppressFirstLoginSetup:
+      plist: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>DidSeeCloudSetup</key><true/>
+            <key>DidSeePrivacy</key><true/>
+            <key>SkipExpressSettingsUpdating</key><true/>
+        </dict>
+        </plist>
+```
+
+The plist is written as a file in the cidata ISO and read by the Lima guest
+agent before first login. When `plist` is omitted, the built-in template is
+used.
 
 ## Caveats
 - No support for turning off the video display.
