@@ -57,9 +57,12 @@ reads them as the authoritative initial state and does not reset them.
 
 ### Custom plist
 
-The built-in `com.apple.SetupAssistant.plist` content stamps the current OS
-build/version to prevent macOS from resetting the wizard state. If the keys
-that macOS checks change between OS releases, you can supply your own plist:
+The built-in `com.apple.SetupAssistant.plist` template is shown below. At VM
+creation time, `<build>` is replaced with the output of `sw_vers -buildVersion`
+and `<version>` with `sw_vers -productVersion` from inside the guest. The
+version stamps are what macOS checks to decide whether setup is already
+complete — without them macOS resets `MiniBuddyLaunchReason` to 13 on first
+GUI login.
 
 ```yaml
 vmOpts:
@@ -70,16 +73,40 @@ vmOpts:
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
-            <key>DidSeeCloudSetup</key><true/>
-            <key>DidSeePrivacy</key><true/>
-            <key>SkipExpressSettingsUpdating</key><true/>
+        	<key>DidSeeAccessibility</key><true/>
+        	<key>DidSeeActivationLock</key><true/>
+        	<key>DidSeeAppStore</key><true/>
+        	<key>DidSeeAppearanceSetup</key><true/>
+        	<key>DidSeeApplePaySetup</key><true/>
+        	<key>DidSeeCloudSetup</key><true/>
+        	<key>DidSeeLockdownMode</key><true/>
+        	<key>DidSeePrivacy</key><true/>
+        	<key>DidSeeScreenTime</key><true/>
+        	<key>DidSeeSetupSequence</key><true/>
+        	<key>DidSeeSiriSetup</key><true/>
+        	<key>DidSeeSyncSetup</key><true/>
+        	<key>DidSeeSyncSetup2</key><true/>
+        	<key>DidSeeTermsOfAddress</key><true/>
+        	<key>DidSeeTouchIDSetup</key><true/>
+        	<key>DidSeeiCloudLoginForStorageServices</key><true/>
+        	<key>LastPreLoginTasksPerformedBuild</key><string><build></string>
+        	<key>LastPreLoginTasksPerformedVersion</key><string><version></string>
+        	<key>LastSeenAgeRangeSelectionProductVersion</key><string><version></string>
+        	<key>LastSeenBuddyBuildVersion</key><string><build></string>
+        	<key>LastSeenCloudProductVersion</key><string><version></string>
+        	<key>LastSeenDiagnosticsProductVersion</key><string><version></string>
+        	<key>MiniBuddyLaunchReason</key><integer>0</integer>
+        	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
+        	<key>SkipExpressSettingsUpdating</key><true/>
+        	<key>SkipFirstLoginOptimization</key><true/>
         </dict>
         </plist>
 ```
 
-The plist is written as a file in the cidata ISO and read by the Lima guest
-agent before first login. When `plist` is omitted, the built-in template is
-used.
+When a custom `plist` is supplied, it is used verbatim — no `<build>`/`<version>`
+substitution is performed. Copy and adapt the built-in template above, then
+supply the actual build and version strings for your target OS release if
+needed.
 
 ## Caveats
 - No support for turning off the video display.
