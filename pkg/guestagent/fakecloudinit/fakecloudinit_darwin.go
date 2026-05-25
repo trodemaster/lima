@@ -116,8 +116,8 @@ func processUserData(ctx context.Context, mnt string) error {
 		}
 	}
 	for _, u := range userData.Users {
-		if err := createUser(ctx, &u); err != nil {
-			errs = append(errs, fmt.Errorf("failed to create user %#q: %w", u.Name, err))
+		if err := createUser(ctx, &u, userData.SuppressFirstLoginSetup); err != nil {
+			errs = append(errs, fmt.Errorf("failed to create user %q: %w", u.Name, err))
 		}
 	}
 	for _, entry := range userData.WriteFiles {
@@ -334,7 +334,7 @@ func suppressFirstLoginScreens(uid int, homedir string) error {
 	return nil
 }
 
-func createUser(ctx context.Context, u *cloudinittypes.User) error {
+func createUser(ctx context.Context, u *cloudinittypes.User, suppressFirstLoginSetup bool) error {
 	homedir := u.Homedir
 	if homedir == "" {
 		return fmt.Errorf("homedir is required for user %#q", u.Name)
@@ -399,11 +399,13 @@ func createUser(ctx context.Context, u *cloudinittypes.User) error {
 		return fmt.Errorf("failed to populate home directory for user %#q: %w", u.Name, err)
 	}
 
-	// Write first-login preference plists now, as root, before any GUI session starts.
-	// cfprefsd reads these fresh at first login so macOS does not reset them.
-	if err = suppressFirstLoginScreens(uid, homedir); err != nil {
-		// Non-fatal: SSH provisioning (configure.sh) can still handle it if needed.
-		logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %q", u.Name)
+	if suppressFirstLoginSetup {
+		// Write first-login preference plists now, as root, before any GUI session starts.
+		// cfprefsd reads these fresh at first login so macOS does not reset them.
+		if err = suppressFirstLoginScreens(uid, homedir); err != nil {
+			// Non-fatal: SSH provisioning (configure.sh) can still handle it if needed.
+			logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %q", u.Name)
+		}
 	}
 
 	cmd = exec.CommandContext(ctx, "chmod", "700", homedir)

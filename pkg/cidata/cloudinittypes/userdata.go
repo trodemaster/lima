@@ -24,6 +24,10 @@ type UserData struct {
 	CACerts *CACerts `yaml:"ca_certs,omitempty"`
 
 	BootCmd []string `yaml:"bootcmd,omitempty"`
+
+	// SuppressFirstLoginSetup suppresses macOS first-login wizard screens (Darwin guests only).
+	// Controlled by vmOpts.vz.suppressFirstLoginSetup in the Lima instance config.
+	SuppressFirstLoginSetup bool `yaml:"suppress_first_login_setup,omitempty"`
 }
 
 type Growpart struct {

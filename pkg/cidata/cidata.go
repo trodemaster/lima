@@ -148,6 +148,13 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 		Plain:          *instConfig.Plain,
 		TimeZone:       *instConfig.TimeZone,
 		NoCloudInit:    noCloudInit,
+		SuppressFirstLoginSetup: func() bool {
+			var vzOpts limatype.VZOpts
+			if err := limayaml.Convert(instConfig.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+				return false
+			}
+			return vzOpts.SuppressFirstLoginSetup != nil && *vzOpts.SuppressFirstLoginSetup
+		}(),
 		Param:          instConfig.Param,
 		LegacyBIOS:     *instConfig.Firmware.LegacyBIOS,
 		TPM:            *instConfig.TPM,

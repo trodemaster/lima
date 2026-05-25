@@ -124,8 +124,9 @@ type QEMUOpts struct {
 }
 
 type VZOpts struct {
-	Rosetta         Rosetta     `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
-	DiskImageFormat *image.Type `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	Rosetta                  Rosetta     `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
+	DiskImageFormat          *image.Type `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	SuppressFirstLoginSetup  *bool       `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
 }
 
 type Rosetta struct {

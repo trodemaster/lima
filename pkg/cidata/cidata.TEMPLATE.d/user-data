@@ -173,6 +173,11 @@ ca_certs:
 {{- end }}
 
 {{- $nicHeal := and (eq .OS "Linux") .Networks }}
+
+{{- if .SuppressFirstLoginSetup }}
+suppress_first_login_setup: true
+{{- end }}
+
 {{- if or .BootCmds $nicHeal }}
 bootcmd:
 {{- if $nicHeal }}
