@@ -310,32 +310,26 @@ func suppressFirstLoginScreens(ctx context.Context, mnt string, uid int, homedir
 	}
 
 	// GlobalPreferences — write AppleLanguagesSchemaVersion for macOS 27+.
-	// ISRootMigrator (a UAU plugin) reads this key via cfprefsd at first GUI login to
-	// determine whether to show the Apple Account setup dialog. On macOS 27, BTM delays
-	// third-party LaunchDaemons past ISRootMigrator, so this write must happen here
-	// (as a root LaunchDaemon installed during disk patching) to be visible before the
-	// first GUI session starts. 5400 is the schema version encoding for macOS 27.0;
-	// ISRootMigrator interprets it as "languages already migrated" and skips the dialog.
-	// On macOS 26 and earlier, AppleLanguagesSchemaVersion is absent or zero, and
-	// ISRootMigrator does not exist, so writing this key is safely ignored.
+	// ISRootMigrator (a UAU plugin new in macOS 27) reads this key at first GUI login
+	// via NSUserDefaults, which searches the system domain (/Library/Preferences/) as a
+	// fallback when the user's own cfprefsd domain is empty (as it always is on first login
+	// for a new account). Writing to the system domain via "defaults write" goes through
+	// cfprefsd daemon without requiring a user session, and the daemon persists it across
+	// boots. Direct writes to ~/Library/Preferences/.GlobalPreferences.plist are silently
+	// discarded: cfprefsd rebuilds the user domain from its own database on first login,
+	// ignoring any pre-existing plist file. 5400 is the macOS 27.0 schema version;
+	// ISRootMigrator interprets it as "already migrated" and skips the Apple Account dialog.
+	// On macOS 26 and earlier, ISRootMigrator does not exist, so this is a no-op.
 	if gpVerOut, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
 		gpVer := strings.TrimSpace(string(gpVerOut))
 		if majorStr := strings.SplitN(gpVer, ".", 2)[0]; majorStr != "" {
 			if major, err := strconv.Atoi(majorStr); err == nil && major >= 27 {
-				globalPrefs := filepath.Join(prefsDir, ".GlobalPreferences.plist")
-				const globalPrefsPlist = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AppleLanguagesSchemaVersion</key>
-	<integer>5400</integer>
-</dict>
-</plist>
-`
-				if err := os.WriteFile(globalPrefs, []byte(globalPrefsPlist), 0o600); err != nil {
-					logrus.WithError(err).Warnf("Failed to write .GlobalPreferences.plist %q", globalPrefs)
-				} else if err := os.Chown(globalPrefs, uid, -1); err != nil {
-					logrus.WithError(err).Warnf("Failed to chown .GlobalPreferences.plist %q", globalPrefs)
+				cmd := exec.Command("defaults", "write", "/Library/Preferences/.GlobalPreferences",
+					"AppleLanguagesSchemaVersion", "-int", "5400")
+				if out, err := cmd.CombinedOutput(); err != nil {
+					logrus.WithError(err).Warnf("Failed to write AppleLanguagesSchemaVersion to system domain (output=%q)", string(out))
+				} else {
+					logrus.Infof("Wrote AppleLanguagesSchemaVersion=5400 to system .GlobalPreferences domain")
 				}
 			}
 		}
@@ -374,6 +368,19 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 	// account itself exists — either case makes a filesystem-existence check wrong.
 	if cmd := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+u.Name, "RecordName"); cmd.Run() == nil {
 		logrus.Debugf("user %#q already exists in directory services, skipping creation", u.Name)
+		if suppressFirstLoginSetup {
+			// User was pre-created before fakecloudinit ran (observed on macOS 27 where
+			// early-boot processes may initialize directory services before LaunchDaemons).
+			// Still suppress first-login dialogs so ISRootMigrator does not trigger the
+			// Apple Account setup flow on the first GUI session.
+			var existingUID int
+			if sysUser, err := user.Lookup(u.Name); err == nil {
+				existingUID, _ = strconv.Atoi(sysUser.Uid)
+			}
+			if err := suppressFirstLoginScreens(mnt, existingUID, homedir); err != nil {
+				logrus.WithError(err).Warnf("Failed to suppress first-login screens for pre-existing user %#q", u.Name)
+			}
+		}
 		return nil
 	}
 	if u.UID == "" {
