@@ -309,6 +309,38 @@ func suppressFirstLoginScreens(ctx context.Context, mnt string, uid int, homedir
 		logrus.WithError(err).Warnf("Failed to chown SetupAssistant plist %#q", saPlist)
 	}
 
+	// GlobalPreferences — write AppleLanguagesSchemaVersion for macOS 27+.
+	// ISRootMigrator (a UAU plugin) reads this key via cfprefsd at first GUI login to
+	// determine whether to show the Apple Account setup dialog. On macOS 27, BTM delays
+	// third-party LaunchDaemons past ISRootMigrator, so this write must happen here
+	// (as a root LaunchDaemon installed during disk patching) to be visible before the
+	// first GUI session starts. 5400 is the schema version encoding for macOS 27.0;
+	// ISRootMigrator interprets it as "languages already migrated" and skips the dialog.
+	// On macOS 26 and earlier, AppleLanguagesSchemaVersion is absent or zero, and
+	// ISRootMigrator does not exist, so writing this key is safely ignored.
+	if gpVerOut, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+		gpVer := strings.TrimSpace(string(gpVerOut))
+		if majorStr := strings.SplitN(gpVer, ".", 2)[0]; majorStr != "" {
+			if major, err := strconv.Atoi(majorStr); err == nil && major >= 27 {
+				globalPrefs := filepath.Join(prefsDir, ".GlobalPreferences.plist")
+				const globalPrefsPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AppleLanguagesSchemaVersion</key>
+	<integer>5400</integer>
+</dict>
+</plist>
+`
+				if err := os.WriteFile(globalPrefs, []byte(globalPrefsPlist), 0o600); err != nil {
+					logrus.WithError(err).Warnf("Failed to write .GlobalPreferences.plist %q", globalPrefs)
+				} else if err := os.Chown(globalPrefs, uid, -1); err != nil {
+					logrus.WithError(err).Warnf("Failed to chown .GlobalPreferences.plist %q", globalPrefs)
+				}
+			}
+		}
+	}
+
 	// defaults write (not os.WriteFile) so cfprefsd owns the domain; raw file
 	// writes get overwritten when softwareupdated rewrites the plist on first boot.
 	swPrefs := [][]string{
