@@ -244,6 +244,10 @@ const setupAssistantPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>DidSeeTermsOfAddress</key><true/>
 	<key>DidSeeTouchIDSetup</key><true/>
 	<key>DidSeeiCloudLoginForStorageServices</key><true/>
+	<key>InitialAccountOnMac</key><true/>
+	<key>InitialAccountSetupDate</key><date>2026-01-01T00:00:00Z</date>
+	<key>InitialSetupBuildVersion</key><string>{{.Build}}</string>
+	<key>InitialSetupProductVersion</key><string>{{.Version}}</string>
 	<key>LastPreLoginTasksPerformedBuild</key><string>{{.Build}}</string>
 	<key>LastPreLoginTasksPerformedVersion</key><string>{{.Version}}</string>
 	<key>LastSeenAgeRangeSelectionProductVersion</key><string>{{.Version}}</string>
@@ -255,6 +259,7 @@ const setupAssistantPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>LastSeenNewFeaturesProductVersion</key><string>{{.Version}}</string>
 	<key>LastSeenSiriProductVersion</key><string>{{.Version}}</string>
 	<key>LastSeenStorageServicesProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenSyncProductVersion</key><string>{{.Version}}</string>
 	<key>LastSeeniCloudStorageServicesProductVersion</key><string>{{.Version}}</string>
 	<key>MiniBuddyLaunchReason</key><integer>0</integer>
 	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
@@ -380,14 +385,22 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 		if suppressFirstLoginSetup {
 			// User was pre-created before fakecloudinit ran (observed on macOS 27 where
 			// early-boot processes may initialize directory services before LaunchDaemons).
-			// Still suppress first-login dialogs so ISRootMigrator does not trigger the
-			// Apple Account setup flow on the first GUI session.
-			var existingUID int
-			if sysUser, err := user.Lookup(u.Name); err == nil {
-				existingUID, _ = strconv.Atoi(sysUser.Uid)
-			}
-			if err := suppressFirstLoginScreens(mnt, existingUID, homedir); err != nil {
-				logrus.WithError(err).Warnf("Failed to suppress first-login screens for pre-existing user %#q", u.Name)
+			// Suppress first-login dialogs, but only on the first run: once mini-buddy has
+			// launched (Boot 2+) it writes InitialAccountOnMac and other markers; re-writing
+			// the SA plist would overwrite those and trigger dialogs on every subsequent boot.
+			saPlistPath := filepath.Join(homedir, "Library/Preferences/com.apple.SetupAssistant.plist")
+			if _, statErr := os.Stat(saPlistPath); os.IsNotExist(statErr) {
+				// SA plist not yet written — resolve UID with u.UID as fallback so we never
+				// chown the file to root when user.Lookup fails during early-boot opendirectoryd init.
+				uid, _ := strconv.Atoi(u.UID)
+				if sysUser, err := user.Lookup(u.Name); err == nil {
+					if actualUID, err := strconv.Atoi(sysUser.Uid); err == nil {
+						uid = actualUID
+					}
+				}
+				if err := suppressFirstLoginScreens(mnt, uid, homedir); err != nil {
+					logrus.WithError(err).Warnf("Failed to suppress first-login screens for pre-existing user %#q", u.Name)
+				}
 			}
 		}
 		return nil
