@@ -222,7 +222,8 @@ func populateHomeDir(ctx context.Context, uid int, homedir string) error {
 // setupAssistantPlistTemplate is the built-in com.apple.SetupAssistant.plist.
 // The Build/Version stamps are what macOS checks to decide whether setup is
 // already complete; without them macOS resets MiniBuddyLaunchReason to 13 on
-// first GUI login.
+// first GUI login. The macOS 27+ LastSeen*/Skip* keys are ignored on older
+// OS versions.
 const setupAssistantPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -249,10 +250,18 @@ const setupAssistantPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>LastSeenBuddyBuildVersion</key><string>{{.Build}}</string>
 	<key>LastSeenCloudProductVersion</key><string>{{.Version}}</string>
 	<key>LastSeenDiagnosticsProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenGlassTintUpsellProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenIntelligenceProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenNewFeaturesProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenSiriProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeenStorageServicesProductVersion</key><string>{{.Version}}</string>
+	<key>LastSeeniCloudStorageServicesProductVersion</key><string>{{.Version}}</string>
 	<key>MiniBuddyLaunchReason</key><integer>0</integer>
 	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
 	<key>SkipExpressSettingsUpdating</key><true/>
 	<key>SkipFirstLoginOptimization</key><true/>
+	<key>SkipiCloudSetup</key><true/>
+	<key>SkipiCloudStorageSetup</key><true/>
 </dict>
 </plist>
 `
