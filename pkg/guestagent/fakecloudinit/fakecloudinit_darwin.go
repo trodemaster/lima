@@ -262,6 +262,7 @@ const setupAssistantPlistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>LastSeenSyncProductVersion</key><string>{{.Version}}</string>
 	<key>LastSeeniCloudStorageServicesProductVersion</key><string>{{.Version}}</string>
 	<key>MiniBuddyLaunchReason</key><integer>0</integer>
+	<key>MiniBuddyLaunchedPostMigration</key><true/>
 	<key>MiniBuddyShouldLaunchToResumeSetup</key><false/>
 	<key>SkipExpressSettingsUpdating</key><true/>
 	<key>SkipFirstLoginOptimization</key><true/>
