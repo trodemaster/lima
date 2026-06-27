@@ -335,11 +335,11 @@ func suppressFirstLoginScreens(ctx context.Context, mnt string, uid int, homedir
 	// ignoring any pre-existing plist file. 5400 is the macOS 27.0 schema version;
 	// ISRootMigrator interprets it as "already migrated" and skips the Apple Account dialog.
 	// On macOS 26 and earlier, ISRootMigrator does not exist, so this is a no-op.
-	if gpVerOut, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+	if gpVerOut, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output(); err == nil {
 		gpVer := strings.TrimSpace(string(gpVerOut))
 		if majorStr := strings.SplitN(gpVer, ".", 2)[0]; majorStr != "" {
 			if major, err := strconv.Atoi(majorStr); err == nil && major >= 27 {
-				cmd := exec.Command("defaults", "write", "/Library/Preferences/.GlobalPreferences",
+				cmd := exec.CommandContext(ctx, "defaults", "write", "/Library/Preferences/.GlobalPreferences",
 					"AppleLanguagesSchemaVersion", "-int", "5400")
 				if out, err := cmd.CombinedOutput(); err != nil {
 					logrus.WithError(err).Warnf("Failed to write AppleLanguagesSchemaVersion to system domain (output=%q)", string(out))
@@ -383,7 +383,7 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 	// account itself exists — either case makes a filesystem-existence check wrong.
 	if cmd := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+u.Name, "RecordName"); cmd.Run() == nil {
 		logrus.Debugf("user %#q already exists in directory services, skipping creation", u.Name)
-		if suppressFirstLoginSetup {
+		if _, statErr := os.Stat(filepath.Join(mnt, "setup-assistant.plist")); statErr == nil {
 			// User was pre-created before fakecloudinit ran (observed on macOS 27 where
 			// early-boot processes may initialize directory services before LaunchDaemons).
 			// Suppress first-login dialogs, but only on the first run: once mini-buddy has
@@ -399,7 +399,7 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 						uid = actualUID
 					}
 				}
-				if err := suppressFirstLoginScreens(mnt, uid, homedir); err != nil {
+				if err := suppressFirstLoginScreens(ctx, mnt, uid, homedir); err != nil {
 					logrus.WithError(err).Warnf("Failed to suppress first-login screens for pre-existing user %#q", u.Name)
 				}
 			}
