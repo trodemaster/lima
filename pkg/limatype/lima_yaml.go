@@ -124,9 +124,9 @@ type QEMUOpts struct {
 }
 
 type VZOpts struct {
-	Rosetta                  Rosetta                  `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
-	DiskImageFormat          *image.Type              `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
-	SuppressFirstLoginSetup  *SuppressFirstLoginSetup `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
+	Rosetta                 Rosetta                  `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
+	DiskImageFormat         *image.Type              `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	SuppressFirstLoginSetup *SuppressFirstLoginSetup `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
 }
 
 // SuppressFirstLoginSetup suppresses macOS first-login wizard screens (Darwin guests only).

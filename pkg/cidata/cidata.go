@@ -165,9 +165,9 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 			}
 			return vzOpts.SuppressFirstLoginSetup.Plist
 		}(),
-		Param:          instConfig.Param,
-		LegacyBIOS:     *instConfig.Firmware.LegacyBIOS,
-		TPM:            *instConfig.TPM,
+		Param:      instConfig.Param,
+		LegacyBIOS: *instConfig.Firmware.LegacyBIOS,
+		TPM:        *instConfig.TPM,
 	}
 
 	firstUsernetIndex := limayaml.FirstUsernetIndex(instConfig)

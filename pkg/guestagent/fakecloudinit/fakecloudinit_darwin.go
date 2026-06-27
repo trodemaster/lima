@@ -232,7 +232,7 @@ func populateHomeDir(ctx context.Context, uid int, homedir string) error {
 //
 // If mnt/setup-assistant.plist exists on the cidata volume it is used verbatim
 // instead of the built-in template, allowing the caller to supply version-specific keys.
-func suppressFirstLoginScreens(mnt string, uid int, homedir string) error {
+func suppressFirstLoginScreens(ctx context.Context, mnt string, uid int, homedir string) error {
 	prefsDir := filepath.Join(homedir, "Library/Preferences")
 	if err := os.MkdirAll(prefsDir, 0o700); err != nil {
 		return fmt.Errorf("failed to create Preferences dir %q: %w", prefsDir, err)
@@ -256,13 +256,13 @@ func suppressFirstLoginScreens(mnt string, uid int, homedir string) error {
 		// to determine whether to show express-settings dialogs (MiniBuddyLaunchReason=13).
 		// If the stored build matches the running build, mini-buddy considers setup complete.
 		buildVersion := "unknown"
-		if out, err := exec.Command("sw_vers", "-buildVersion").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, "sw_vers", "-buildVersion").Output(); err == nil {
 			buildVersion = strings.TrimSpace(string(out))
 		} else {
 			logrus.WithError(err).Warn("Failed to get build version from sw_vers")
 		}
 		productVersion := "unknown"
-		if out, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
+		if out, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output(); err == nil {
 			productVersion = strings.TrimSpace(string(out))
 		} else {
 			logrus.WithError(err).Warn("Failed to get product version from sw_vers")
@@ -337,7 +337,7 @@ func suppressFirstLoginScreens(mnt string, uid int, homedir string) error {
 	}
 	for _, pref := range swPrefs {
 		args := append([]string{"write", "/Library/Preferences/com.apple.SoftwareUpdate"}, pref...)
-		cmd := exec.Command("defaults", args...)
+		cmd := exec.CommandContext(ctx, "defaults", args...)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			// Non-fatal: the dialog is annoying but does not block VM operation.
 			logrus.WithError(err).Warnf("Failed to set SoftwareUpdate pref %v (output=%q)", pref[0], output)
@@ -416,7 +416,7 @@ func createUser(ctx context.Context, u *cloudinittypes.User, suppressFirstLoginS
 	if suppressFirstLoginSetup {
 		// Write first-login preference plists now, as root, before any GUI session starts.
 		// cfprefsd reads these fresh at first login so macOS does not reset them.
-		if err = suppressFirstLoginScreens(mnt, uid, homedir); err != nil {
+		if err = suppressFirstLoginScreens(ctx, mnt, uid, homedir); err != nil {
 			// Non-fatal: SSH provisioning (configure.sh) can still handle it if needed.
 			logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %q", u.Name)
 		}
