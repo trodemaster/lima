@@ -77,6 +77,20 @@ var tccPresets = map[string][]tccEntry{
 			csreq:       csreqTerminal,
 		},
 	},
+	// lima-guestagent-full-disk-access: allows the lima guest agent to read any file.
+	// The agent binary is on the cidata volume at /Volumes/cidata/lima-guestagent.
+	// csreq is nil (NULL) because the binary is rebuilt per-release; NULL skips
+	// code-signing validation for this path-based entry.
+	"lima-guestagent-full-disk-access": {
+		{
+			service:     "kTCCServiceSystemPolicyAllFiles",
+			client:      "/Volumes/cidata/lima-guestagent",
+			clientType:  1,
+			authValue:   2,
+			authVersion: 1,
+			csreq:       nil,
+		},
+	},
 }
 
 // patchTCC writes TCC permission entries into the system TCC database on
