@@ -26,7 +26,7 @@ type UserData struct {
 	BootCmd []string `yaml:"bootcmd,omitempty"`
 
 	// SuppressFirstLoginSetup suppresses macOS first-login wizard screens (Darwin guests only).
-	// Controlled by vmOpts.vz.suppressFirstLoginSetup in the Lima instance config.
+	// Controlled by osOpts.darwin.suppressFirstLoginSetup in the Lima instance config.
 	SuppressFirstLoginSetup bool `yaml:"suppress_first_login_setup,omitempty"`
 }
 

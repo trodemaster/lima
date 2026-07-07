@@ -149,21 +149,21 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 		TimeZone:       *instConfig.TimeZone,
 		NoCloudInit:    noCloudInit,
 		SuppressFirstLoginSetup: func() bool {
-			var vzOpts limatype.VZOpts
-			if err := limayaml.Convert(instConfig.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+			var darwinOpts limatype.DarwinOpts
+			if err := limayaml.Convert(instConfig.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.darwin"); err != nil {
 				return false
 			}
-			return vzOpts.SuppressFirstLoginSetup != nil
+			return darwinOpts.SuppressFirstLoginSetup != nil
 		}(),
 		SuppressFirstLoginSetupPlist: func() string {
-			var vzOpts limatype.VZOpts
-			if err := limayaml.Convert(instConfig.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+			var darwinOpts limatype.DarwinOpts
+			if err := limayaml.Convert(instConfig.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.darwin"); err != nil {
 				return ""
 			}
-			if vzOpts.SuppressFirstLoginSetup == nil {
+			if darwinOpts.SuppressFirstLoginSetup == nil {
 				return ""
 			}
-			return vzOpts.SuppressFirstLoginSetup.Plist
+			return darwinOpts.SuppressFirstLoginSetup.Plist
 		}(),
 		Param:      instConfig.Param,
 		LegacyBIOS: *instConfig.Firmware.LegacyBIOS,

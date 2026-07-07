@@ -37,13 +37,13 @@ limactl shell macos cat /Users/${USER}.guest/password
 
 By default, macOS shows a series of setup wizard screens (Setup Assistant /
 mini-buddy) on the first GUI login. For automated or headless-style macOS VMs
-this is inconvenient. Set `vmOpts.vz.suppressFirstLoginSetup` to have Lima
+this is inconvenient. Set `osOpts.darwin.suppressFirstLoginSetup` to have Lima
 pre-populate the relevant preference plists during provisioning, before any GUI
 session starts, so the setup screens are skipped automatically:
 
 ```yaml
-vmOpts:
-  vz:
+osOpts:
+  darwin:
     suppressFirstLoginSetup: {}
 ```
 
@@ -65,8 +65,8 @@ complete — without them macOS resets `MiniBuddyLaunchReason` to 13 on first
 GUI login.
 
 ```yaml
-vmOpts:
-  vz:
+osOpts:
+  darwin:
     suppressFirstLoginSetup:
       plist: |
         <?xml version="1.0" encoding="UTF-8"?>
