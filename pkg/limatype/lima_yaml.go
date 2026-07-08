@@ -352,6 +352,12 @@ type WindowsOpts struct {
 
 type DarwinOpts struct {
 	SuppressFirstLoginSetup *SuppressFirstLoginSetup `yaml:"suppressFirstLoginSetup,omitempty" json:"suppressFirstLoginSetup,omitempty" jsonschema:"nullable"`
+
+	// Clipboard enables host-guest clipboard sharing (Darwin guests only, vz driver only).
+	// Requires macOS 15+ on both host and guest, and a SPICE vdagent-compatible
+	// guest agent listening on the port named by VZSpiceAgentPortAttachment.
+	// Lima does not ship or install that guest agent.
+	Clipboard *bool `yaml:"clipboard,omitempty" json:"clipboard,omitempty" jsonschema:"nullable"` // default: false
 }
 
 // SuppressFirstLoginSetup suppresses macOS first-login wizard screens (Darwin guests only).

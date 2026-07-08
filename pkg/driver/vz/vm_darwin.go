@@ -224,6 +224,10 @@ func createVM(ctx context.Context, inst *limatype.Instance) (*vz.VirtualMachine,
 		return nil, err
 	}
 
+	if err = attachClipboard(inst, vmConfig); err != nil {
+		return nil, err
+	}
+
 	if err = attachNetwork(ctx, inst, vmConfig); err != nil {
 		return nil, err
 	}
