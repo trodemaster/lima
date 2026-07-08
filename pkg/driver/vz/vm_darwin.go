@@ -266,6 +266,10 @@ func createVM(ctx context.Context, inst *limatype.Instance, retainedFDs *retaine
 		return nil, err
 	}
 
+	if err = attachClipboard(inst, vmConfig); err != nil {
+		return nil, err
+	}
+
 	if err = attachNetwork(ctx, inst, vmConfig, retainedFDs); err != nil {
 		return nil, err
 	}
