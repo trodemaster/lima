@@ -108,6 +108,29 @@ substitution is performed. Copy and adapt the built-in template above, then
 supply the actual build and version strings for your target OS release if
 needed.
 
+## Clipboard sharing
+
+| ⚡ Requirement | macOS >= 15, on both host and guest |
+|-------------------|-----------------------------|
+
+Set `osOpts.darwin.clipboard` to attach a
+[SPICE agent port](https://developer.apple.com/documentation/virtualization/vzspiceagentportattachment)
+for host-guest clipboard sharing:
+
+```yaml
+osOpts:
+  darwin:
+    clipboard: true
+```
+
+This only configures the host side of the channel. A SPICE vdagent-compatible
+agent must also be running in the guest — Lima does not ship or install one.
+[utmapp/vd_agent](https://github.com/utmapp/vd_agent) provides a macOS build of
+such an agent (a `spice-vdagentd` LaunchDaemon plus a per-user `spice-vdagent`
+LaunchAgent) that can be built and installed manually.
+
+**Default:** unset — clipboard sharing is disabled.
+
 ## Caveats
 - No support for turning off the video display.
 - No support for automatic port forwarding.
