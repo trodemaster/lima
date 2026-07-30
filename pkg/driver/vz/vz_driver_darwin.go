@@ -450,6 +450,24 @@ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
 		}
 	}
 
+	return l.maybeRunGuestProvisioning(ctx)
+}
+
+// maybeRunGuestProvisioning runs a VZMacGuestProvisioningOptions first-boot if
+// vmOpts.vz.guestProvisioning is configured. Non-fatal: logs a warning and
+// returns nil on unavailability or failure so Lima can continue normally.
+func (l *LimaVzDriver) maybeRunGuestProvisioning(ctx context.Context) error {
+	var vzOpts limatype.VZOpts
+	if err := limayaml.Convert(l.Instance.Config.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+		logrus.WithError(err).Warn("guest provisioning: could not read vmOpts.vz")
+		return nil
+	}
+	if vzOpts.GuestProvisioning == nil {
+		return nil
+	}
+	if err := RunGuestProvisioningBoot(ctx, l.Instance, vzOpts.GuestProvisioning); err != nil {
+		logrus.WithError(err).Warn("guest provisioning boot failed (non-fatal); configure.sh will handle account setup")
+	}
 	return nil
 }
 

@@ -125,8 +125,28 @@ type QEMUOpts struct {
 }
 
 type VZOpts struct {
-	Rosetta         Rosetta     `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
-	DiskImageFormat *image.Type `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	Rosetta           Rosetta              `yaml:"rosetta,omitempty" json:"rosetta,omitempty"`
+	DiskImageFormat   *image.Type          `yaml:"diskImageFormat,omitempty" json:"diskImageFormat,omitempty" jsonschema:"nullable"`
+	GuestProvisioning *VZGuestProvisioning `yaml:"guestProvisioning,omitempty" json:"guestProvisioning,omitempty" jsonschema:"nullable"`
+}
+
+// VZGuestProvisioning configures automated first-boot macOS guest setup via
+// VZMacGuestProvisioningOptions (requires macOS 27+ host and guest).
+//
+// macOS evaluates these options only on the first boot after OS restore.
+// Lima runs a transient "provisioning boot" before the normal lifecycle starts
+// so that subsequent boots find the account already configured.
+//
+// Overlaps with configure.sh: password, autologin, and SSH remote login are
+// also configured by Lima's configure.sh. Once this feature is stable, those
+// steps can be skipped for macOS 27+ guests. SSH key injection and other
+// configure.sh tasks have no equivalent here and still run as normal.
+type VZGuestProvisioning struct {
+	FullName            string `yaml:"fullName,omitempty" json:"fullName,omitempty"`
+	Username            string `yaml:"username,omitempty" json:"username,omitempty"`
+	Password            string `yaml:"password,omitempty" json:"password,omitempty"`
+	LogsInAutomatically bool   `yaml:"logsInAutomatically,omitempty" json:"logsInAutomatically,omitempty"`
+	EnablesRemoteLogin  bool   `yaml:"enablesRemoteLogin,omitempty" json:"enablesRemoteLogin,omitempty"`
 }
 
 type Rosetta struct {
