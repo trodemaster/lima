@@ -80,7 +80,7 @@
           <InstallFrom>
             <MetaData wcm:action="add">
               <Key>/IMAGE/INDEX</Key>
-              <Value>{{ if .IsWindowsServer }}1{{ else if eq .Arch "x86_64" }}6{{ else }}3{{ end }}</Value>
+              <Value>{{.ImageIndex}}</Value>
             </MetaData>
           </InstallFrom>
           <InstallTo>
