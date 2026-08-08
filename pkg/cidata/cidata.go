@@ -638,8 +638,21 @@ func GenerateWindowsISO(ctx context.Context, instDir, name string, instConfig *l
 		return "", err
 	}
 
-	// Check OS version (Windows 11 or server 2025). This differentiates autounattend.xml.
-	if err := args.checkWindowsVersion(instDir); err != nil {
+	var winOpts limatype.WindowsOpts
+	if err := limayaml.Convert(instConfig.OsOpts[limatype.WINDOWS], &winOpts, "osOpts.Windows"); err != nil {
+		return "", err
+	}
+	var edition, installationType string
+	if winOpts.Edition != nil {
+		edition = *winOpts.Edition
+	}
+	if winOpts.InstallationType != nil {
+		installationType = *winOpts.InstallationType
+	}
+
+	// Check OS version (Windows 11 or server 2025) and which image to install.
+	// This differentiates autounattend.xml.
+	if err := args.checkWindowsVersion(instDir, edition, installationType); err != nil {
 		return "", err
 	}
 

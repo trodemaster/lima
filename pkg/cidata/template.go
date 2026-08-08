@@ -9,17 +9,21 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/sethvargo/go-password/password"
+	"github.com/sirupsen/logrus"
 
 	"github.com/lima-vm/lima/v2/pkg/identifiers"
 	"github.com/lima-vm/lima/v2/pkg/iso9660util"
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
 	"github.com/lima-vm/lima/v2/pkg/textutil"
+	"github.com/lima-vm/lima/v2/pkg/udfutil"
+	"github.com/lima-vm/lima/v2/pkg/wimutil"
 )
 
 //go:embed cidata.TEMPLATE.d
@@ -31,10 +35,6 @@ const templateFSRoot = "cidata.TEMPLATE.d"
 var windowsTemplateFS embed.FS
 
 const windowsTemplateFSRoot = "wincidata.TEMPLATE.d"
-
-// This is for checking whether Windows OS is 11 or server 2025.
-// For example, Windows 11 x86-64's label is CCCOMA_X64FRE_EN-US_DV9.
-const windowsClientISOLabelPrefix = "CCCOMA_"
 
 type CACerts struct {
 	RemoveDefaults *bool
@@ -138,6 +138,7 @@ type TemplateArgs struct {
 	WindowsInitialPassword          string
 	LegacyBIOS                      bool
 	IsWindowsServer                 bool
+	ImageIndex                      int
 	TPM                             bool
 	SuppressFirstLoginSetup         bool
 	SuppressFirstLoginSetupPlist    string // empty = use built-in plist
@@ -157,17 +158,149 @@ func (t *TemplateArgs) generateWindowsInitialPassword() error {
 	return nil
 }
 
-// checkWindowsVersion checks if a guest VM is Windows 11 (true) or Windows server 2025 (false).
-func (t *TemplateArgs) checkWindowsVersion(instDir string) error {
+// windowsImageCandidates are the installer image paths checked, in order,
+// for a Windows install image inside the installer ISO.
+var windowsImageCandidates = []string{"sources/install.wim", "sources/install.esd"}
+
+// checkWindowsVersion determines whether the guest is Windows 11 (client) or
+// Windows Server, and which WIM/ESD image index to install, by reading the
+// installer ISO's own image list -- rather than trusting the ISO's volume
+// label, which varies across distribution channels (retail, volume
+// license, Insider, UUP) and is not a reliable signal for either fact.
+func (t *TemplateArgs) checkWindowsVersion(instDir, edition, installationType string) error {
 	imagePath := filepath.Join(instDir, filenames.ISO)
-	label, err := iso9660util.Label(imagePath)
+	f, err := os.Open(imagePath)
 	if err != nil {
-		return fmt.Errorf("failed to get ISO label: %w", err)
+		return fmt.Errorf("failed to open %#q: %w", imagePath, err)
+	}
+	defer f.Close()
+
+	var images []wimutil.Image
+	var openErrs []error
+	for _, name := range windowsImageCandidates {
+		r, err := udfutil.Open(f, name)
+		if err != nil {
+			openErrs = append(openErrs, err)
+			continue
+		}
+		images, err = wimutil.Images(r)
+		if err != nil {
+			return fmt.Errorf("failed to read the image list from %#q on %#q: %w", name, imagePath, err)
+		}
+		break
+	}
+	if images == nil {
+		return fmt.Errorf("failed to find a Windows install image (%s) on %#q: %w",
+			strings.Join(windowsImageCandidates, " or "), imagePath, errors.Join(openErrs...))
 	}
 
-	t.IsWindowsServer = !strings.HasPrefix(label, windowsClientISOLabelPrefix)
+	isServer := images[0].IsServer()
+	for _, img := range images[1:] {
+		if img.IsServer() != isServer {
+			return fmt.Errorf("%#q contains a mix of Windows client and server images, which is not supported", imagePath)
+		}
+	}
+	t.IsWindowsServer = isServer
+
+	selected, err := selectWindowsImage(images, edition, installationType)
+	if err != nil {
+		return fmt.Errorf("%#q: %w", imagePath, err)
+	}
+	t.ImageIndex = selected.Index
 
 	return nil
+}
+
+// describeImage formats an image for logging: its EDITIONID, its
+// INSTALLATIONTYPE, and its DISPLAYNAME (the WIM's own human-readable name,
+// e.g. "Windows Server 2025 Standard Evaluation (Desktop Experience)"),
+// which is otherwise easy to lose track of once several images share the
+// same EDITIONID.
+func describeImage(img wimutil.Image) string {
+	return fmt.Sprintf("%#q (installationType=%#q, display=%#q)", img.EditionID, img.InstallationType, img.DisplayName)
+}
+
+func describeImages(images []wimutil.Image) string {
+	described := make([]string, len(images))
+	for i, img := range images {
+		described[i] = describeImage(img)
+	}
+	return strings.Join(described, ", ")
+}
+
+// selectWindowsImage picks the WIM/ESD image to install.
+//
+// If edition is set, it must match (case-insensitively) at least one
+// image's EDITIONID, or selectWindowsImage returns an error listing every
+// image found. EDITIONID is not always unique: on Windows Server ISOs, the
+// Core and Desktop Experience variants of the same edition commonly share
+// one. If installationType is also set, it further narrows by
+// INSTALLATIONTYPE (e.g. "Server" vs. "Server Core") the same way.
+//
+// If edition is unset entirely, an image with EDITIONID "Professional" is
+// preferred -- matching what the hardcoded index this behavior replaces
+// resolved to on the standard single-edition-per-arch retail ISO -- falling
+// back to the first image if none is found.
+//
+// If edition narrowed the candidates to more than one image and
+// installationType wasn't set to narrow further, an installation type that
+// doesn't look like a "Core" variant is preferred, since that's the more
+// broadly usable default for someone who didn't ask for Core specifically.
+// Either fallback is logged, listing every candidate that was available, so
+// picking a default is never silent.
+func selectWindowsImage(images []wimutil.Image, edition, installationType string) (wimutil.Image, error) {
+	candidates := images
+	if edition != "" {
+		var matched []wimutil.Image
+		for _, img := range images {
+			if strings.EqualFold(img.EditionID, edition) {
+				matched = append(matched, img)
+			}
+		}
+		if len(matched) == 0 {
+			return wimutil.Image{}, fmt.Errorf("no image with edition %#q found (set `osOpts.windows.edition` to one of: %s)", edition, describeImages(images))
+		}
+		candidates = matched
+	}
+
+	if installationType != "" {
+		var matched []wimutil.Image
+		for _, img := range candidates {
+			if strings.EqualFold(img.InstallationType, installationType) {
+				matched = append(matched, img)
+			}
+		}
+		if len(matched) == 0 {
+			return wimutil.Image{}, fmt.Errorf("no image with edition %#q and installation type %#q found (available: %s)", edition, installationType, describeImages(candidates))
+		}
+		candidates = matched
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+
+	if edition == "" {
+		for _, img := range candidates {
+			if strings.EqualFold(img.EditionID, "Professional") {
+				return img, nil
+			}
+		}
+		logrus.Warnf("no %#q edition found among: %s; defaulting to %s. Set `osOpts.windows.edition` to choose a specific one.",
+			"Professional", describeImages(candidates), describeImage(candidates[0]))
+		return candidates[0], nil
+	}
+
+	for _, img := range candidates {
+		if !strings.Contains(strings.ToLower(img.InstallationType), "core") {
+			logrus.Warnf("edition %#q matches multiple images: %s; defaulting to %s. Set `osOpts.windows.installationType` to choose a different one.",
+				edition, describeImages(candidates), describeImage(img))
+			return img, nil
+		}
+	}
+	logrus.Warnf("edition %#q matches multiple images: %s; defaulting to %s. Set `osOpts.windows.installationType` to choose a different one.",
+		edition, describeImages(candidates), describeImage(candidates[0]))
+	return candidates[0], nil
 }
 
 func ValidateTemplateArgs(args *TemplateArgs) error {

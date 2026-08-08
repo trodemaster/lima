@@ -14,6 +14,7 @@ import (
 
 	"github.com/lima-vm/lima/v2/pkg/iso9660util"
 	"github.com/lima-vm/lima/v2/pkg/limatype"
+	"github.com/lima-vm/lima/v2/pkg/wimutil"
 )
 
 var defaultRemoveDefaults = false
@@ -310,6 +311,7 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 				WindowsInitialPassword: "dummy-password",
 				TPM:                    true,
 				IsWindowsServer:        true,
+				ImageIndex:             1,
 			},
 			expectedAutounattendStrings: []string{
 				`<Path>E:\viostor\2k25\amd64</Path>`,
@@ -334,6 +336,7 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 				User:                   "windows-user",
 				WindowsInitialPassword: "dummy-password",
 				TPM:                    true,
+				ImageIndex:             6,
 			},
 			expectedAutounattendStrings: []string{
 				`<Path>E:\viostor\w11\amd64</Path>`,
@@ -360,6 +363,7 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 				LegacyBIOS:             true,
 				TPM:                    true,
 				IsWindowsServer:        true,
+				ImageIndex:             1,
 			},
 			expectedAutounattendStrings: []string{
 				`<Path>E:\viostor\2k25\amd64</Path>`,
@@ -384,6 +388,7 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 				User:                   "windows-user",
 				WindowsInitialPassword: "dummy-password",
 				TPM:                    false,
+				ImageIndex:             6,
 			},
 			expectedAutounattendStrings: []string{
 				`<Path>E:\viostor\w11\amd64</Path>`,
@@ -409,6 +414,7 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 				User:                   "windows-user",
 				WindowsInitialPassword: "dummy-password",
 				TPM:                    false,
+				ImageIndex:             3,
 			},
 			expectedAutounattendStrings: []string{
 				`<Path>E:\viostor\w11\arm64</Path>`,
@@ -445,4 +451,71 @@ func TestExecuteTemplateWindowsISO(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelectWindowsImage(t *testing.T) {
+	images := []wimutil.Image{
+		{Index: 1, EditionID: "Enterprise", InstallationType: "Client", DisplayName: "Windows 11 Enterprise"},
+		{Index: 2, EditionID: "Professional", InstallationType: "Client", DisplayName: "Windows 11 Pro"},
+		{Index: 3, EditionID: "Education", InstallationType: "Client", DisplayName: "Windows 11 Education"},
+	}
+
+	t.Run("defaults to Professional when unset", func(t *testing.T) {
+		img, err := selectWindowsImage(images, "", "")
+		assert.NilError(t, err)
+		assert.Equal(t, img.Index, 2)
+	})
+
+	t.Run("matches edition case-insensitively", func(t *testing.T) {
+		img, err := selectWindowsImage(images, "education", "")
+		assert.NilError(t, err)
+		assert.Equal(t, img.Index, 3)
+	})
+
+	t.Run("errors clearly on an unknown edition, listing display names", func(t *testing.T) {
+		_, err := selectWindowsImage(images, "Home", "")
+		assert.ErrorContains(t, err, "no image with edition `Home` found")
+		assert.ErrorContains(t, err, "Windows 11 Enterprise")
+		assert.ErrorContains(t, err, "Windows 11 Pro")
+		assert.ErrorContains(t, err, "Windows 11 Education")
+	})
+
+	t.Run("falls back to the first image when no Professional edition exists", func(t *testing.T) {
+		serverImages := []wimutil.Image{
+			{Index: 1, EditionID: "ServerStandard", InstallationType: "Server Core", DisplayName: "Windows Server Standard"},
+			{Index: 2, EditionID: "ServerDatacenter", InstallationType: "Server Core", DisplayName: "Windows Server Datacenter"},
+		}
+		img, err := selectWindowsImage(serverImages, "", "")
+		assert.NilError(t, err)
+		assert.Equal(t, img.Index, 1)
+	})
+
+	t.Run("edition matching multiple images defaults to a non-Core installation type", func(t *testing.T) {
+		coreAndDesktop := []wimutil.Image{
+			{Index: 1, EditionID: "ServerStandardEval", InstallationType: "Server Core", DisplayName: "Windows Server 2025 Standard Evaluation"},
+			{Index: 2, EditionID: "ServerStandardEval", InstallationType: "Server", DisplayName: "Windows Server 2025 Standard Evaluation (Desktop Experience)"},
+		}
+		img, err := selectWindowsImage(coreAndDesktop, "ServerStandardEval", "")
+		assert.NilError(t, err)
+		assert.Equal(t, img.Index, 2)
+	})
+
+	t.Run("edition plus installationType selects exactly one image", func(t *testing.T) {
+		coreAndDesktop := []wimutil.Image{
+			{Index: 1, EditionID: "ServerStandardEval", InstallationType: "Server Core", DisplayName: "Windows Server 2025 Standard Evaluation"},
+			{Index: 2, EditionID: "ServerStandardEval", InstallationType: "Server", DisplayName: "Windows Server 2025 Standard Evaluation (Desktop Experience)"},
+		}
+		img, err := selectWindowsImage(coreAndDesktop, "ServerStandardEval", "server core")
+		assert.NilError(t, err)
+		assert.Equal(t, img.Index, 1)
+	})
+
+	t.Run("errors clearly when edition and installationType together match nothing", func(t *testing.T) {
+		coreAndDesktop := []wimutil.Image{
+			{Index: 1, EditionID: "ServerStandardEval", InstallationType: "Server Core", DisplayName: "Windows Server 2025 Standard Evaluation"},
+			{Index: 2, EditionID: "ServerStandardEval", InstallationType: "Server", DisplayName: "Windows Server 2025 Standard Evaluation (Desktop Experience)"},
+		}
+		_, err := selectWindowsImage(coreAndDesktop, "ServerStandardEval", "Client")
+		assert.ErrorContains(t, err, "no image with edition `ServerStandardEval` and installation type `Client` found")
+	})
 }

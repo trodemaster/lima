@@ -358,6 +358,20 @@ type OsOpts map[OS]any
 
 type WindowsOpts struct {
 	VirtioWin []File `yaml:"virtioWin,omitempty" json:"virtioWin,omitempty"`
+
+	// Edition selects which image to install from the installer ISO's
+	// sources/install.wim (or install.esd), by EDITIONID (e.g.
+	// "Professional", "Enterprise"), when it contains more than one. If
+	// unset, an image with EDITIONID "Professional" is preferred; if none
+	// is found, the first image is used.
+	Edition *string `yaml:"edition,omitempty" json:"edition,omitempty" jsonschema:"nullable"`
+
+	// InstallationType disambiguates between images that share the same
+	// Edition, by the image's own INSTALLATIONTYPE (e.g. "Server" vs.
+	// "Server Core"), when Edition alone matches more than one image. If
+	// unset in that situation, an image whose installation type does not
+	// look like a "Core" variant is preferred.
+	InstallationType *string `yaml:"installationType,omitempty" json:"installationType,omitempty" jsonschema:"nullable"`
 }
 
 type DarwinOpts struct {
