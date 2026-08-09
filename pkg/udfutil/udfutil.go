@@ -90,7 +90,7 @@ func Open(r io.ReaderAt, path string) (io.ReadSeeker, error) {
 		return nil, err
 	}
 
-	for _, name := range strings.Split(strings.Trim(path, "/"), "/") {
+	for name := range strings.SplitSeq(strings.Trim(path, "/"), "/") {
 		if name == "" {
 			continue
 		}
