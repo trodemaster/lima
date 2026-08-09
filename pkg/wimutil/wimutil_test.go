@@ -81,7 +81,7 @@ func TestImages(t *testing.T) {
 
 func TestImagesBadSignature(t *testing.T) {
 	data := buildFixture(t, sampleXML)
-	copy(data[0:8], []byte("NOTAWIM\x00"))
+	copy(data[0:8], "NOTAWIM\x00")
 	_, err := Images(bytes.NewReader(data))
 	assert.ErrorContains(t, err, "bad signature")
 }

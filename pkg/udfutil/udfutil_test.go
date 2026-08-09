@@ -80,7 +80,7 @@ func putFID(data []byte, offset int, name string, icbLBN uint32, isParent bool) 
 //	/            (root, ICB at partition-relative lbn 0)
 //	/subdir      (directory, lbn 1)
 //	/subdir/big  (regular file, lbn 2, split across two extents)
-func buildUDFFixture(t *testing.T) ([]byte, []byte) {
+func buildUDFFixture(t *testing.T) (image, wantContent []byte) {
 	t.Helper()
 	b := newFixtureBuilder()
 
