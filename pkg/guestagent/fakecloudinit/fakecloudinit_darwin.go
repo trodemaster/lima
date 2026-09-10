@@ -337,7 +337,7 @@ func suppressFirstLoginScreens(ctx context.Context, mnt string, uid int, homedir
 	// On macOS 26 and earlier, ISRootMigrator does not exist, so this is a no-op.
 	if gpVerOut, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output(); err == nil {
 		gpVer := strings.TrimSpace(string(gpVerOut))
-		if majorStr := strings.SplitN(gpVer, ".", 2)[0]; majorStr != "" {
+		if majorStr, _, _ := strings.Cut(gpVer, "."); majorStr != "" {
 			if major, err := strconv.Atoi(majorStr); err == nil && major >= 27 {
 				cmd := exec.CommandContext(ctx, "defaults", "write", "/Library/Preferences/.GlobalPreferences",
 					"AppleLanguagesSchemaVersion", "-int", "5400")
