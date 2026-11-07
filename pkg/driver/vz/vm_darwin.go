@@ -19,7 +19,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/Code-Hex/vz/v3"
+	"github.com/Code-Hex/vz/v4"
 	"github.com/coreos/go-semver/semver"
 	"github.com/docker/go-units"
 	"github.com/lima-vm/go-qcow2reader"
@@ -129,8 +129,17 @@ func startVM(ctx context.Context, inst *limatype.Instance, sshLocalPort int, onV
 		return nil, nil, nil, err
 	}
 
+	// Register before Start so that the transition to running is not missed.
+	stateCh := make(chan vz.VirtualMachineState, 8)
+	stopStateNotify, err := machine.StateChangedNotify(stateCh)
+	if err != nil {
+		retainedFDs.CloseAll()
+		return nil, nil, nil, err
+	}
+
 	err = machine.Start()
 	if err != nil {
+		stopStateNotify()
 		retainedFDs.CloseAll()
 		return nil, nil, nil, err
 	}
@@ -141,6 +150,7 @@ func startVM(ctx context.Context, inst *limatype.Instance, sshLocalPort int, onV
 	go func() {
 		// Handle errors via errCh and handle stop vm during context close
 		defer func() {
+			stopStateNotify()
 			retainedFDs.CloseAll()
 		}()
 		for {
@@ -151,7 +161,7 @@ func startVM(ctx context.Context, inst *limatype.Instance, sshLocalPort int, onV
 					_, err := machine.RequestStop()
 					logrus.Errorf("Error while stopping the VM %#q", err)
 				}
-			case newState := <-machine.StateChangedNotify():
+			case newState := <-stateCh:
 				switch newState {
 				case vz.VirtualMachineStateRunning:
 					pidFile := filepath.Join(inst.Dir, filenames.PIDFile(*inst.Config.VMType))
