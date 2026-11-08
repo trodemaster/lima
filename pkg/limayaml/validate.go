@@ -76,6 +76,14 @@ func Validate(y *limatype.LimaYAML, warn bool) error {
 			errs = errors.Join(errs, fmt.Errorf("field `user.shell` must be an absolute path, got %#q", shell))
 		}
 	}
+	if *y.OS == limatype.DARWIN && y.User.Name != nil && y.User.Home != nil {
+		var darwinOpts limatype.DarwinOpts
+		if err := Convert(y.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.Darwin"); err == nil && darwinOpts.GuestProvisioning != nil {
+			if want := "/Users/" + *y.User.Name; *y.User.Home != want {
+				errs = errors.Join(errs, fmt.Errorf("field `user.home` must be %#q with `osOpts.Darwin.guestProvisioning`, got %#q: Setup Assistant creates the home directory", want, *y.User.Home))
+			}
+		}
+	}
 
 	if len(y.Images) == 0 {
 		errs = errors.Join(errs, errors.New("field `images` must be set"))

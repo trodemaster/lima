@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -813,6 +814,49 @@ func TestFillDefaultMergesBlockDevices(t *testing.T) {
 	FillDefault(t.Context(), &y, &d, &o, "test.yaml", false)
 
 	assert.DeepEqual(t, y.BlockDevices, []string{"/dev/disk1", "/dev/disk2", "/dev/disk3"})
+}
+
+func TestFillDefaultGuestProvisioningUser(t *testing.T) {
+	provisioning := limatype.OsOpts{limatype.DARWIN: limatype.DarwinOpts{
+		GuestProvisioning: &limatype.DarwinGuestProvisioning{Password: "secret"},
+	}}
+	fill := func(y, d, o limatype.LimaYAML) limatype.LimaYAML {
+		FillDefault(t.Context(), &y, &d, &o, filepath.Join(t.TempDir(), "lima.yaml"), false)
+		return y
+	}
+	darwin := new(limatype.DARWIN)
+
+	t.Run("account is <host user>.guest and the home follows it", func(t *testing.T) {
+		y := fill(limatype.LimaYAML{OS: darwin, OsOpts: provisioning}, limatype.LimaYAML{}, limatype.LimaYAML{})
+		assert.Assert(t, strings.HasSuffix(*y.User.Name, GuestProvisioningUserSuffix), "got %q", *y.User.Name)
+		assert.Equal(t, *y.User.Home, "/Users/"+*y.User.Name)
+		// The minimal config has other validation errors (e.g. no images), but none about the home.
+		if err := Validate(&y, false); err != nil {
+			assert.Assert(t, !strings.Contains(err.Error(), "user.home"), "got %v", err)
+		}
+	})
+
+	t.Run("an explicit user.name is kept", func(t *testing.T) {
+		y := fill(limatype.LimaYAML{OS: darwin, OsOpts: provisioning, User: limatype.User{Name: new("custom")}}, limatype.LimaYAML{}, limatype.LimaYAML{})
+		assert.Equal(t, *y.User.Name, "custom")
+		assert.Equal(t, *y.User.Home, "/Users/custom")
+	})
+
+	t.Run("provisioning set in the default template applies too", func(t *testing.T) {
+		y := fill(limatype.LimaYAML{OS: darwin}, limatype.LimaYAML{OsOpts: provisioning}, limatype.LimaYAML{})
+		assert.Assert(t, strings.HasSuffix(*y.User.Name, GuestProvisioningUserSuffix), "got %q", *y.User.Name)
+	})
+
+	t.Run("an explicit user.home that Setup Assistant would not create is rejected", func(t *testing.T) {
+		y := fill(limatype.LimaYAML{OS: darwin, OsOpts: provisioning, User: limatype.User{Home: new("/Users/elsewhere")}}, limatype.LimaYAML{}, limatype.LimaYAML{})
+		assert.ErrorContains(t, Validate(&y, false), "user.home")
+	})
+
+	t.Run("without provisioning the macOS defaults are unchanged", func(t *testing.T) {
+		y := fill(limatype.LimaYAML{OS: darwin}, limatype.LimaYAML{}, limatype.LimaYAML{})
+		assert.Assert(t, !strings.HasSuffix(*y.User.Name, GuestProvisioningUserSuffix), "got %q", *y.User.Name)
+		assert.Equal(t, *y.User.Home, "/Users/"+*y.User.Name+".guest")
+	})
 }
 
 func TestStaticPortForwarding(t *testing.T) {

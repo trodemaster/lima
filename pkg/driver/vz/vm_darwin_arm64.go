@@ -19,6 +19,7 @@ import (
 
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
+	"github.com/lima-vm/lima/v2/pkg/limayaml"
 	"github.com/lima-vm/lima/v2/pkg/osutil"
 	"github.com/lima-vm/lima/v2/pkg/progressbar"
 )
@@ -185,4 +186,38 @@ func installMacOS(ctx context.Context, vm *vz.VirtualMachine, ipsw string) error
 		}
 	}
 	return nil
+}
+
+// guestProvisioningStartOptions returns the start options that apply
+// osOpts.Darwin.guestProvisioning if prepareGuestProvisioning marked the
+// instance for provisioning on this boot.
+func guestProvisioningStartOptions(inst *limatype.Instance) ([]vz.VirtualMachineStartOption, error) {
+	if _, err := os.Stat(filepath.Join(inst.Dir, filenames.VzGuestProvisioning)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var darwinOpts limatype.DarwinOpts
+	if err := limayaml.Convert(inst.Config.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.Darwin"); err != nil {
+		return nil, err
+	}
+	gp := darwinOpts.GuestProvisioning
+	if gp == nil {
+		return nil, nil
+	}
+	opts, err := vz.NewMacGuestProvisioningOptions(
+		*inst.Config.User.Comment,
+		*inst.Config.User.Name,
+		gp.Password,
+		vz.WithGuestAutomaticLogin(gp.LogsInAutomatically),
+		vz.WithGuestRemoteLogin(gp.EnablesRemoteLogin),
+	)
+	if err != nil {
+		// vz returns ErrUnsupportedOSVersion on hosts older than macOS 27;
+		// prepareGuestProvisioning should already have skipped those.
+		return nil, fmt.Errorf("failed to create guest provisioning options: %w", err)
+	}
+	logrus.Infof("Provisioning guest user %#q on first boot", *inst.Config.User.Name)
+	return []vz.VirtualMachineStartOption{vz.WithGuestProvisioningOptions(opts)}, nil
 }

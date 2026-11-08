@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/goccy/go-yaml"
 	"github.com/sethvargo/go-password/password"
@@ -337,8 +338,18 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 	if homedir == "" {
 		return fmt.Errorf("homedir is required for user %#q", u.Name)
 	}
+	// With VZMacGuestProvisioningOptions (macOS 27+), Setup Assistant creates the
+	// user on the first boot, so adopt that account instead of creating one.
+	if pw, err := os.ReadFile(filepath.Join(mnt, "guest-provisioning-password")); err == nil {
+		return adoptProvisionedUser(ctx, u, mnt, string(pw))
+	}
 	if osutil.FileExists(homedir) {
 		logrus.Debugf("homedir %#q already exists, skipping user creation for user %#q", homedir, u.Name)
+		return nil
+	}
+	if _, _, err := lookupDSUser(ctx, u.Name); err == nil {
+		// Created by Setup Assistant via guest provisioning on an earlier boot.
+		logrus.Debugf("user %#q already exists in directory services, skipping user creation", u.Name)
 		return nil
 	}
 	if u.UID == "" {
@@ -411,23 +422,102 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
 	}
 
+	if err := installUserFiles(u, uid, homedir, pw); err != nil {
+		return err
+	}
+	logrus.Infof("Created user %#q. The password is stored in %#q", u.Name, filepath.Join(homedir, "password"))
+	return nil
+}
+
+// adoptProvisionedUser waits for Setup Assistant to create the user from
+// VZMacGuestProvisioningOptions, then installs Lima's files into that account.
+// The account's home directory is the one Setup Assistant chose, which differs
+// from the Lima default (/Users/<user>.guest).
+func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw string) error {
+	logrus.Infof("Waiting for Setup Assistant to create user %#q from guest provisioning", u.Name)
+	const timeout = 10 * time.Minute
+	deadline := time.Now().Add(timeout)
+	var (
+		uid     int
+		homedir string
+		err     error
+	)
+	for {
+		if uid, homedir, err = lookupDSUser(ctx, u.Name); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("user %#q was not created by Setup Assistant within %v: %w", u.Name, timeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if homedir != u.Homedir {
+		logrus.Infof("Using home %#q created by Setup Assistant instead of %#q", homedir, u.Homedir)
+	}
+	if !osutil.FileExists(homedir) {
+		if err := populateHomeDir(ctx, uid, homedir); err != nil {
+			return fmt.Errorf("failed to populate home directory for user %#q: %w", u.Name, err)
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(mnt, "setup-assistant.plist")); statErr == nil {
+		if err := suppressFirstLoginScreens(ctx, mnt, uid, homedir); err != nil {
+			logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %#q", u.Name)
+		}
+	}
+	if err := installUserFiles(u, uid, homedir, pw); err != nil {
+		return err
+	}
+	logrus.Infof("Adopted user %#q created by Setup Assistant (uid %d, home %#q)", u.Name, uid, homedir)
+	return nil
+}
+
+// lookupDSUser returns the UID and home directory of a local directory services user.
+func lookupDSUser(ctx context.Context, name string) (uid int, homedir string, err error) {
+	out, err := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+name, "UniqueID", "NFSHomeDirectory").Output()
+	if err != nil {
+		return 0, "", fmt.Errorf("user %#q not found in directory services: %w", name, err)
+	}
+	for line := range strings.Lines(string(out)) {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(k) {
+		case "UniqueID":
+			uid, err = strconv.Atoi(strings.TrimSpace(v))
+		case "NFSHomeDirectory":
+			homedir = strings.TrimSpace(v)
+		}
+	}
+	if err != nil || homedir == "" {
+		return 0, "", fmt.Errorf("failed to parse directory services record for user %#q (output=%#q)", name, out)
+	}
+	return uid, homedir, nil
+}
+
+// installUserFiles writes the password file, SSH authorized keys and sudoers
+// entry for the user.
+func installUserFiles(u *cloudinittypes.User, uid int, homedir, pw string) error {
 	pwPath := filepath.Join(homedir, "password")
-	if err = os.WriteFile(pwPath, []byte(pw+"\n"), 0o400); err != nil {
+	if err := os.WriteFile(pwPath, []byte(pw+"\n"), 0o400); err != nil {
 		return fmt.Errorf("failed to write password file for user %#q: %w", u.Name, err)
 	}
-	logrus.Infof("Created user %#q. The password is stored in %#q", u.Name, pwPath)
 
 	dotSSHPath := filepath.Join(homedir, ".ssh")
-	if err = os.MkdirAll(dotSSHPath, 0o700); err != nil {
+	if err := os.MkdirAll(dotSSHPath, 0o700); err != nil {
 		return fmt.Errorf("failed to create .ssh directory for user %#q: %w", u.Name, err)
 	}
 	authKeysPath := filepath.Join(dotSSHPath, "authorized_keys")
 	authKeysContent := strings.Join(u.SSHAuthorizedKeys, "\n")
-	if err = os.WriteFile(authKeysPath, []byte(authKeysContent), 0o600); err != nil {
+	if err := os.WriteFile(authKeysPath, []byte(authKeysContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write authorized_keys file for user %#q: %w", u.Name, err)
 	}
 	for _, f := range []string{pwPath, dotSSHPath, authKeysPath} {
-		if err = os.Chown(f, uid, -1); err != nil {
+		if err := os.Chown(f, uid, -1); err != nil {
 			return fmt.Errorf("failed to chown %#q for user %#q: %w", f, u.Name, err)
 		}
 	}

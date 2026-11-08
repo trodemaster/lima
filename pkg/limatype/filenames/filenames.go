@@ -74,6 +74,7 @@ const (
 	VzGuestOSVersion        = "vz-guest-os-version"       // macOS guests only; restore-image OS version, e.g. "27.0.0"
 	VzGuestOSBuildVersion   = "vz-guest-os-build-version" // macOS guests only; restore-image build, e.g. "26A428"
 	VzAux                   = "vz-aux"                    // macOS guests only
+	VzGuestProvisioning     = "vz-guest-provisioning"     // macOS guests only; present until the first boot applies osOpts.Darwin.guestProvisioning
 	VzEfi                   = "vz-efi"                    // efi variable store
 	QemuEfiCodeFD           = "qemu-efi-code.fd"          // efi code; not always created
 	AnsibleInventoryYAML    = "ansible-inventory.yaml"

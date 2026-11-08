@@ -116,6 +116,41 @@ When `suppressFirstLoginSetupPlist` is supplied, it is used verbatim — no
 template above, then supply the actual build and version strings for your
 target OS release if needed.
 
+### Guest provisioning
+| ⚡ Requirement | Lima >= 2.3, macOS >= 27.0 on both host and guest, ARM |
+|-------------------|-----------------------------|
+
+On macOS 27 and later, the Virtualization framework can create the guest user
+account on the first boot after the OS is installed. Set
+`osOpts.Darwin.guestProvisioning` to have Lima pass these settings to that
+first boot:
+
+```yaml
+osOpts:
+  Darwin:
+    guestProvisioning:
+      password: "..."
+      logsInAutomatically: true
+      enablesRemoteLogin: true
+```
+
+The account is the Lima user: `user.comment` is its full name and `user.name` its
+username, which defaults to your host username followed by `.guest`, like the home
+directory Lima uses for other macOS guests, so that it cannot clash with your host
+home directory when that is mounted in the guest.
+Setup Assistant creates the home directory at `/Users/<user.name>`, so
+`user.home` must be left at that value.
+
+macOS only reads these settings on the first boot after installation, so they
+have no effect on an existing instance. Guests older than macOS 27 ignore them,
+so Lima checks the guest version recorded at install time and skips
+provisioning with a warning when the guest is older than macOS 27, or when the
+host is older than macOS 27.
+
+The password is stored in plain text in the instance's `lima.yaml`.
+
+**Default:** unset — no guest provisioning.
+
 ## Caveats
 - No support for turning off the video display.
 - No support for automatic port forwarding.

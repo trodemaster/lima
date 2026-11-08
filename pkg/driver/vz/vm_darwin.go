@@ -129,6 +129,12 @@ func startVM(ctx context.Context, inst *limatype.Instance, sshLocalPort int, onV
 		return nil, nil, nil, err
 	}
 
+	startOpts, err := guestProvisioningStartOptions(inst)
+	if err != nil {
+		retainedFDs.CloseAll()
+		return nil, nil, nil, err
+	}
+
 	// Register before Start so that the transition to running is not missed.
 	stateCh := make(chan vz.VirtualMachineState, 8)
 	stopStateNotify, err := machine.StateChangedNotify(stateCh)
@@ -137,11 +143,17 @@ func startVM(ctx context.Context, inst *limatype.Instance, sshLocalPort int, onV
 		return nil, nil, nil, err
 	}
 
-	err = machine.Start()
+	err = machine.Start(startOpts...)
 	if err != nil {
 		stopStateNotify()
 		retainedFDs.CloseAll()
 		return nil, nil, nil, err
+	}
+	if len(startOpts) > 0 {
+		// macOS only evaluates guest provisioning on the first boot after installation.
+		if err := os.Remove(filepath.Join(inst.Dir, filenames.VzGuestProvisioning)); err != nil {
+			logrus.WithError(err).Warn("Failed to remove the guest provisioning marker")
+		}
 	}
 
 	wrapper := &virtualMachineWrapper{VirtualMachine: machine, stopped: false}
