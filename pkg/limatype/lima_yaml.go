@@ -371,6 +371,21 @@ type DarwinOpts struct {
 	// SuppressFirstLoginSetupPlist overrides the built-in com.apple.SetupAssistant.plist content
 	// used by SuppressFirstLoginSetup. Ignored unless SuppressFirstLoginSetup is true.
 	SuppressFirstLoginSetupPlist *string `yaml:"suppressFirstLoginSetupPlist,omitempty" json:"suppressFirstLoginSetupPlist,omitempty" jsonschema:"nullable"`
+	// GuestProvisioning creates the guest user account on first boot via the
+	// Virtualization framework (vz driver, macOS 27 or later on host and guest).
+	GuestProvisioning *DarwinGuestProvisioning `yaml:"guestProvisioning,omitempty" json:"guestProvisioning,omitempty" jsonschema:"nullable"`
+}
+
+// DarwinGuestProvisioning maps to VZMacGuestProvisioningOptions.
+// macOS evaluates these only on the first boot after the OS is installed;
+// changing them on an existing instance has no effect.
+// The account's username and full name are the Lima user's `user.name` and
+// `user.comment`; with this option `user.name` defaults to "<host user>.guest",
+// and `user.home` to "/Users/<user.name>", where Setup Assistant creates it.
+type DarwinGuestProvisioning struct {
+	Password            string `yaml:"password,omitempty" json:"password,omitempty"`
+	LogsInAutomatically bool   `yaml:"logsInAutomatically,omitempty" json:"logsInAutomatically,omitempty"`
+	EnablesRemoteLogin  bool   `yaml:"enablesRemoteLogin,omitempty" json:"enablesRemoteLogin,omitempty"`
 }
 
 func NewOS(osname string) OS {

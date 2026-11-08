@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Code-Hex/vz/v4"
@@ -38,6 +40,7 @@ import (
 	"github.com/lima-vm/lima/v2/pkg/osutil"
 	"github.com/lima-vm/lima/v2/pkg/reflectutil"
 	"github.com/lima-vm/lima/v2/pkg/sshutil"
+	"github.com/lima-vm/lima/v2/pkg/store"
 )
 
 var knownYamlProperties = []string{
@@ -419,6 +422,13 @@ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
 			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
 				return err
 			}
+			// Guest provisioning is expected to be applied by Setup Assistant, which Patch skips.
+			if osutil.FileExists(filepath.Join(l.Instance.Dir, filenames.VzGuestProvisioning)) {
+				logrus.Info("Letting Setup Assistant run on first boot for guest provisioning")
+				if err := macos.RemoveSetupAssistantMarkers(ctx, disk); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return driverutil.EnsureDisk(ctx, l.Instance.Dir, *l.Instance.Config.Disk, l.diskImageFormat)
@@ -482,7 +492,54 @@ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return l.prepareGuestProvisioning()
+}
+
+// prepareGuestProvisioning marks the freshly installed macOS guest for
+// provisioning on its first boot if osOpts.Darwin.guestProvisioning is
+// configured and both host and guest are macOS 27 or later.
+// Otherwise it logs a warning and does nothing.
+func (l *LimaVzDriver) prepareGuestProvisioning() error {
+	var darwinOpts limatype.DarwinOpts
+	if err := limayaml.Convert(l.Instance.Config.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.Darwin"); err != nil {
+		return err
+	}
+	if darwinOpts.GuestProvisioning == nil {
+		return nil
+	}
+	hostVersion, err := osutil.ProductVersion()
+	if err != nil {
+		return err
+	}
+	guestVersion, _ := store.ReadGuestOSVersion(l.Instance.Dir)
+	if reason := guestProvisioningSkipReason(hostVersion.Major, guestVersion); reason != "" {
+		logrus.Warnf("Ignoring osOpts.Darwin.guestProvisioning: %s", reason)
+		return nil
+	}
+	return os.WriteFile(filepath.Join(l.Instance.Dir, filenames.VzGuestProvisioning), nil, 0o644)
+}
+
+// guestProvisioningSkipReason returns why guest provisioning cannot be used
+// with the given host macOS major version and guest macOS version (as read by
+// store.ReadGuestOSVersion), or "" if it can.
+// Guests before macOS 27 silently ignore VZMacGuestProvisioningOptions, so the
+// guest version has to be checked up front rather than relying on an error.
+func guestProvisioningSkipReason(hostMajor int64, guestVersion string) string {
+	if guestVersion == "" {
+		return "the guest macOS version is unknown"
+	}
+	majorStr, _, _ := strings.Cut(guestVersion, ".")
+	guestMajor, err := strconv.Atoi(majorStr)
+	if err != nil {
+		return fmt.Sprintf("cannot parse the guest macOS version %q", guestVersion)
+	}
+	switch {
+	case guestMajor < 27:
+		return fmt.Sprintf("it requires a macOS 27 or later guest, got macOS %s", guestVersion)
+	case hostMajor < 27:
+		return fmt.Sprintf("the host must be upgraded to macOS 27 or later to provision a macOS %s guest", guestVersion)
+	}
+	return ""
 }
 
 func (l *LimaVzDriver) Start(ctx context.Context) (chan error, error) {

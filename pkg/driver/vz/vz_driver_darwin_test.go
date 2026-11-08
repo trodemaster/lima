@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,4 +88,31 @@ func TestValidateRejectsHostLoopbackFalseWithUserV2(t *testing.T) {
 	}
 	l := &LimaVzDriver{Instance: &limatype.Instance{Config: cfg}}
 	assert.ErrorContains(t, l.Validate(t.Context()), "not supported with a `user-v2` network")
+}
+
+func TestGuestProvisioningSkipReason(t *testing.T) {
+	cases := []struct {
+		name         string
+		hostMajor    int64
+		guestVersion string
+		wantReason   string // substring; "" means provisioning runs
+	}{
+		{"27 host, 27 guest", 27, "27.0.0", ""},
+		{"28 host, 27 guest", 28, "27.1.0", ""},
+		{"27 host, 26 guest", 27, "26.6.0", "requires a macOS 27 or later guest"},
+		{"26 host, 26 guest", 26, "26.6.0", "requires a macOS 27 or later guest"},
+		{"26 host, 27 guest", 26, "27.0.0", "host must be upgraded"},
+		{"unknown guest", 27, "", "unknown"},
+		{"unparsable guest", 27, "x.y", "cannot parse"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := guestProvisioningSkipReason(tc.hostMajor, tc.guestVersion)
+			if tc.wantReason == "" {
+				assert.Equal(t, got, "")
+			} else {
+				assert.Assert(t, strings.Contains(got, tc.wantReason), "got %q", got)
+			}
+		})
+	}
 }

@@ -40,3 +40,7 @@ func newMacOSBootLoader() (vz.BootLoader, error) {
 func installMacOS(_ context.Context, _ *vz.VirtualMachine, _ string) error {
 	return errMacOSGuestUnsupported
 }
+
+func guestProvisioningStartOptions(_ *limatype.Instance) ([]vz.VirtualMachineStartOption, error) {
+	return nil, nil
+}

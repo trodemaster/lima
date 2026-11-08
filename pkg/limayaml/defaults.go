@@ -205,8 +205,17 @@ func FillDefault(ctx context.Context, y, d, o *limatype.LimaYAML, filePath strin
 	if o.User.PasswordlessSudo != nil {
 		y.User.PasswordlessSudo = o.User.PasswordlessSudo
 	}
+	// With osOpts.Darwin.guestProvisioning, Setup Assistant creates the account and names
+	// its home directory after it (/Users/<name>). The account is named <host user>.guest,
+	// like Lima's usual home directory for macOS guests, which cannot clash with the host
+	// user's home mounted in the guest, and the home follows the name.
+	provisioned := *y.OS == limatype.DARWIN && guestProvisioningConfigured(y, d, o)
 	if y.User.Name == nil {
-		y.User.Name = new(osutil.LimaUser(ctx, existingLimaVersion, warn, y.OS).Username)
+		name := osutil.LimaUser(ctx, existingLimaVersion, warn, y.OS).Username
+		if provisioned {
+			name += GuestProvisioningUserSuffix
+		}
+		y.User.Name = new(name)
 		warn = false
 	}
 	if y.User.Comment == nil {
@@ -214,7 +223,11 @@ func FillDefault(ctx context.Context, y, d, o *limatype.LimaYAML, filePath strin
 		warn = false
 	}
 	if y.User.Home == nil {
-		y.User.Home = new(osutil.LimaUser(ctx, existingLimaVersion, warn, y.OS).HomeDir)
+		if provisioned {
+			y.User.Home = new("/Users/{{.User}}")
+		} else {
+			y.User.Home = new(osutil.LimaUser(ctx, existingLimaVersion, warn, y.OS).HomeDir)
+		}
 		warn = false
 	}
 	if y.User.Shell == nil {
@@ -957,6 +970,25 @@ func ExistingLimaVersion(instDir string) string {
 		logrus.WithError(err).Warnf("Failed to read %#q", limaVersionFile)
 		return version.Version
 	}
+}
+
+// GuestProvisioningUserSuffix is appended to the host username to name the guest account
+// that Setup Assistant creates from osOpts.Darwin.guestProvisioning.
+const GuestProvisioningUserSuffix = ".guest"
+
+// guestProvisioningConfigured reports whether osOpts.Darwin.guestProvisioning is set in
+// the effective configuration: the override, else the instance, else the default.
+func guestProvisioningConfigured(y, d, o *limatype.LimaYAML) bool {
+	for _, c := range []*limatype.LimaYAML{o, y, d} {
+		if v, ok := c.OsOpts[limatype.DARWIN]; ok {
+			var darwinOpts limatype.DarwinOpts
+			if err := Convert(v, &darwinOpts, "osOpts.Darwin"); err != nil {
+				return false
+			}
+			return darwinOpts.GuestProvisioning != nil
+		}
+	}
+	return false
 }
 
 func fixUpForPlainMode(y *limatype.LimaYAML) {

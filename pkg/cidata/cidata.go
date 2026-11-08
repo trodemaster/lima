@@ -143,6 +143,12 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 	if darwinOpts.SuppressFirstLoginSetupPlist != nil {
 		suppressFirstLoginSetupPlist = *darwinOpts.SuppressFirstLoginSetupPlist
 	}
+	// The vz driver leaves this marker while the first boot is to apply
+	// VZMacGuestProvisioningOptions; Setup Assistant then creates the user.
+	var guestProvisioningPassword string
+	if darwinOpts.GuestProvisioning != nil && osutil.FileExists(filepath.Join(instDir, filenames.VzGuestProvisioning)) {
+		guestProvisioningPassword = darwinOpts.GuestProvisioning.Password
+	}
 	args := TemplateArgs{
 		Debug:              debugutil.Debug,
 		OS:                 *instConfig.OS,
@@ -178,6 +184,7 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 		SuppressFirstLoginSetupPlist: suppressFirstLoginSetupPlist,
 		GuestOSVersion:               guestOSVersion,
 		GuestOSBuildVersion:          guestOSBuildVersion,
+		GuestProvisioningPassword:    guestProvisioningPassword,
 	}
 
 	firstUsernetIndex := limayaml.FirstUsernetIndex(instConfig)
@@ -459,6 +466,15 @@ func GenerateISO9660(ctx context.Context, drv driver.Driver, instDir, name strin
 		layout = append(layout, iso9660util.Entry{
 			Path:   "setup-assistant.plist",
 			Reader: strings.NewReader(args.SuppressFirstLoginSetupPlist),
+		})
+	}
+	if args.GuestProvisioningPassword != "" {
+		// Presence of this file tells the guest-side fakecloudinit that Setup Assistant
+		// creates the user from VZMacGuestProvisioningOptions on this boot, so it must
+		// adopt that account instead of creating one.
+		layout = append(layout, iso9660util.Entry{
+			Path:   "guest-provisioning-password",
+			Reader: strings.NewReader(args.GuestProvisioningPassword),
 		})
 	}
 
