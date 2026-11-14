@@ -382,7 +382,8 @@ type DarwinOpts struct {
 // The account's username and full name are the Lima user's `user.name` and
 // `user.comment`. Setup Assistant creates the home at "/Users/<user.name>"; the
 // guest then moves it to `user.home` (default "/Users/<user.name>.guest") before
-// the user logs in, and turns on automatic login itself in that case.
+// the user logs in. In that case it turns on automatic login itself, which
+// takes effect from the second boot.
 type DarwinGuestProvisioning struct {
 	Password            string `yaml:"password,omitempty" json:"password,omitempty"`
 	LogsInAutomatically bool   `yaml:"logsInAutomatically,omitempty" json:"logsInAutomatically,omitempty"`

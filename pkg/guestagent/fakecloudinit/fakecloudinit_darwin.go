@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"text/template"
 	"time"
 
@@ -448,7 +447,11 @@ func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw s
 	}
 	if homedir != u.Homedir {
 		if err := moveProvisionedHome(ctx, u.Name, uid, homedir, u.Homedir); err != nil {
-			logrus.WithError(err).Warnf("Keeping home %#q created by Setup Assistant instead of %#q", homedir, u.Homedir)
+			// The boot scripts use user.home, so make it lead to the account's home.
+			logrus.WithError(err).Warnf("Keeping home %#q created by Setup Assistant; linking %#q to it", homedir, u.Homedir)
+			if err := os.Symlink(homedir, u.Homedir); err != nil && !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("failed to link %#q to %#q: %w", u.Homedir, homedir, err)
+			}
 		} else {
 			homedir = u.Homedir
 		}
@@ -490,6 +493,15 @@ func moveProvisionedHome(ctx context.Context, name string, uid int, src, dst str
 	}); err != nil {
 		return err
 	}
+	// Setup Assistant leaves a background launchd session running for the new
+	// user (cfprefsd, secd, lsd, trustd, distnoted, ...) although nobody has
+	// logged in; those processes keep the old home open. End that session.
+	userDomain := "user/" + strconv.Itoa(uid)
+	cmd := exec.CommandContext(ctx, "launchctl", "bootout", userDomain)
+	logrus.Infof("Executing command: %v", cmd.Args)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		logrus.WithError(err).Warnf("Failed to end the launchd session of uid %d (output=%#q)", uid, output)
+	}
 	if err := waitFor(ctx, time.Minute, func() error {
 		// pgrep exits 1 when no process matches.
 		out, err := exec.CommandContext(ctx, "pgrep", "-l", "-U", strconv.Itoa(uid)).Output()
@@ -510,7 +522,7 @@ func moveProvisionedHome(ctx context.Context, name string, uid int, src, dst str
 	if err := os.Rename(src, dst); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "dscl", ".", "-create", "/Users/"+name, "NFSHomeDirectory", dst)
+	cmd = exec.CommandContext(ctx, "dscl", ".", "-create", "/Users/"+name, "NFSHomeDirectory", dst)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		if rerr := os.Rename(dst, src); rerr != nil {
 			logrus.WithError(rerr).Errorf("Failed to move %#q back to %#q", dst, src)
@@ -562,8 +574,9 @@ func encodeKCPassword(pw string) []byte {
 }
 
 // enableAutoLogin turns on automatic login for the user, as
-// VZMacGuestProvisioningOptions would have, and restarts loginwindow if no one
-// is logged in so that it takes effect on this boot.
+// VZMacGuestProvisioningOptions would have. loginwindow only reads it at boot,
+// so it takes effect from the next boot; restarting loginwindow on macOS 27.2
+// does not log the user in.
 func enableAutoLogin(ctx context.Context, name, pw string) error {
 	if err := os.WriteFile("/etc/kcpassword", encodeKCPassword(pw), 0o600); err != nil {
 		return err
@@ -572,17 +585,7 @@ func enableAutoLogin(ctx context.Context, name, pw string) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
 	}
-	logrus.Infof("Enabled automatic login for user %#q", name)
-	// /dev/console belongs to root at the login window and to the user after login.
-	var st syscall.Stat_t
-	if err := syscall.Stat("/dev/console", &st); err != nil || st.Uid != 0 {
-		return err
-	}
-	cmd = exec.CommandContext(ctx, "killall", "loginwindow")
-	logrus.Infof("Executing command: %v", cmd.Args)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
-	}
+	logrus.Infof("Enabled automatic login for user %#q from the next boot", name)
 	return nil
 }
 

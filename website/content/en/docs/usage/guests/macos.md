@@ -141,7 +141,8 @@ full name. Setup Assistant always creates the home directory at
 when that is mounted in the guest, so on the first boot the guest moves the home
 to `user.home` before the user logs in. When it does, the guest turns on
 automatic login itself (if `logsInAutomatically` is set) after the move, rather
-than having Setup Assistant log the user in with the old home.
+than having Setup Assistant log the user in with the old home, so the first
+boot stops at the login window and automatic login starts from the second boot.
 
 macOS only reads these settings on the first boot after installation, so they
 have no effect on an existing instance. Guests older than macOS 27 ignore them,
