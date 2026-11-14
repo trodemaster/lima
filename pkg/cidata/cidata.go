@@ -145,9 +145,15 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 	}
 	// The vz driver leaves this marker while the first boot is to apply
 	// VZMacGuestProvisioningOptions; Setup Assistant then creates the user.
-	var guestProvisioningPassword string
+	var (
+		guestProvisioningPassword  string
+		guestProvisioningAutoLogin bool
+	)
 	if darwinOpts.GuestProvisioning != nil && osutil.FileExists(filepath.Join(instDir, filenames.VzGuestProvisioning)) {
 		guestProvisioningPassword = darwinOpts.GuestProvisioning.Password
+		// When the home has to move, the vz driver leaves automatic login off for
+		// Setup Assistant and the guest turns it on after moving the home.
+		guestProvisioningAutoLogin = darwinOpts.GuestProvisioning.LogsInAutomatically && limayaml.GuestProvisioningMovesHome(instConfig)
 	}
 	args := TemplateArgs{
 		Debug:              debugutil.Debug,
@@ -185,6 +191,7 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 		GuestOSVersion:               guestOSVersion,
 		GuestOSBuildVersion:          guestOSBuildVersion,
 		GuestProvisioningPassword:    guestProvisioningPassword,
+		GuestProvisioningAutoLogin:   guestProvisioningAutoLogin,
 	}
 
 	firstUsernetIndex := limayaml.FirstUsernetIndex(instConfig)
@@ -476,6 +483,13 @@ func GenerateISO9660(ctx context.Context, drv driver.Driver, instDir, name strin
 			Path:   "guest-provisioning-password",
 			Reader: strings.NewReader(args.GuestProvisioningPassword),
 		})
+		if args.GuestProvisioningAutoLogin {
+			// Tells fakecloudinit to turn on automatic login after moving the home.
+			layout = append(layout, iso9660util.Entry{
+				Path:   "guest-provisioning-autologin",
+				Reader: strings.NewReader(""),
+			})
+		}
 	}
 
 	driverScripts, err := drv.BootScripts(ctx)

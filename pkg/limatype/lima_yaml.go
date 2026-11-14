@@ -380,8 +380,9 @@ type DarwinOpts struct {
 // macOS evaluates these only on the first boot after the OS is installed;
 // changing them on an existing instance has no effect.
 // The account's username and full name are the Lima user's `user.name` and
-// `user.comment`; with this option `user.name` defaults to "<host user>.guest",
-// and `user.home` to "/Users/<user.name>", where Setup Assistant creates it.
+// `user.comment`. Setup Assistant creates the home at "/Users/<user.name>"; the
+// guest then moves it to `user.home` (default "/Users/<user.name>.guest") before
+// the user logs in, and turns on automatic login itself in that case.
 type DarwinGuestProvisioning struct {
 	Password            string `yaml:"password,omitempty" json:"password,omitempty"`
 	LogsInAutomatically bool   `yaml:"logsInAutomatically,omitempty" json:"logsInAutomatically,omitempty"`

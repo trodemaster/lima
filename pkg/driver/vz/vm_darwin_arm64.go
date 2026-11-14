@@ -206,11 +206,15 @@ func guestProvisioningStartOptions(inst *limatype.Instance) ([]vz.VirtualMachine
 	if gp == nil {
 		return nil, nil
 	}
+	// The guest moves the home from /Users/<user.name> to user.home, which is only
+	// safe while the user is logged out. In that case the guest turns on automatic
+	// login itself once the home has moved.
+	autoLogin := gp.LogsInAutomatically && !limayaml.GuestProvisioningMovesHome(inst.Config)
 	opts, err := vz.NewMacGuestProvisioningOptions(
 		*inst.Config.User.Comment,
 		*inst.Config.User.Name,
 		gp.Password,
-		vz.WithGuestAutomaticLogin(gp.LogsInAutomatically),
+		vz.WithGuestAutomaticLogin(autoLogin),
 		vz.WithGuestRemoteLogin(gp.EnablesRemoteLogin),
 	)
 	if err != nil {

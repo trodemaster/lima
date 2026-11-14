@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -435,28 +436,22 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 // from the Lima default (/Users/<user>.guest).
 func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw string) error {
 	logrus.Infof("Waiting for Setup Assistant to create user %#q from guest provisioning", u.Name)
-	const timeout = 10 * time.Minute
-	deadline := time.Now().Add(timeout)
 	var (
 		uid     int
 		homedir string
-		err     error
 	)
-	for {
-		if uid, homedir, err = lookupDSUser(ctx, u.Name); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("user %#q was not created by Setup Assistant within %v: %w", u.Name, timeout, err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
+	if err := waitFor(ctx, 10*time.Minute, func() (err error) {
+		uid, homedir, err = lookupDSUser(ctx, u.Name)
+		return err
+	}); err != nil {
+		return fmt.Errorf("user %#q was not created by Setup Assistant: %w", u.Name, err)
 	}
 	if homedir != u.Homedir {
-		logrus.Infof("Using home %#q created by Setup Assistant instead of %#q", homedir, u.Homedir)
+		if err := moveProvisionedHome(ctx, u.Name, uid, homedir, u.Homedir); err != nil {
+			logrus.WithError(err).Warnf("Keeping home %#q created by Setup Assistant instead of %#q", homedir, u.Homedir)
+		} else {
+			homedir = u.Homedir
+		}
 	}
 	if !osutil.FileExists(homedir) {
 		if err := populateHomeDir(ctx, uid, homedir); err != nil {
@@ -472,6 +467,122 @@ func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw s
 		return err
 	}
 	logrus.Infof("Adopted user %#q created by Setup Assistant (uid %d, home %#q)", u.Name, uid, homedir)
+	if osutil.FileExists(filepath.Join(mnt, "guest-provisioning-autologin")) {
+		if err := enableAutoLogin(ctx, u.Name, pw); err != nil {
+			logrus.WithError(err).Warnf("Failed to enable automatic login for user %#q", u.Name)
+		}
+	}
+	return nil
+}
+
+// moveProvisionedHome moves the home directory Setup Assistant created (always
+// /Users/<name>; VZMacGuestProvisioningOptions cannot choose it) to the Lima home.
+// It only does so after Setup Assistant has finished and while nothing runs as
+// the user, since a logged-in session keeps using the old path. The vz driver
+// leaves automatic login off for Setup Assistant so the user stays logged out.
+func moveProvisionedHome(ctx context.Context, name string, uid int, src, dst string) error {
+	// Setup Assistant writes .AppleSetupDone when it finishes.
+	if err := waitFor(ctx, 10*time.Minute, func() error {
+		if !osutil.FileExists("/var/db/.AppleSetupDone") {
+			return errors.New("setup assistant has not finished")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := waitFor(ctx, time.Minute, func() error {
+		// pgrep exits 1 when no process matches.
+		out, err := exec.CommandContext(ctx, "pgrep", "-l", "-U", strconv.Itoa(uid)).Output()
+		if err == nil {
+			return fmt.Errorf("processes are running as uid %d: %#q", uid, strings.TrimSpace(string(out)))
+		}
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%#q already exists", dst)
+	}
+	logrus.Infof("Moving home of user %#q from %#q to %#q", name, src, dst)
+	if err := os.Rename(src, dst); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "dscl", ".", "-create", "/Users/"+name, "NFSHomeDirectory", dst)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if rerr := os.Rename(dst, src); rerr != nil {
+			logrus.WithError(rerr).Errorf("Failed to move %#q back to %#q", dst, src)
+		}
+		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
+	}
+	if output, err := exec.CommandContext(ctx, "dscacheutil", "-flushcache").CombinedOutput(); err != nil {
+		logrus.WithError(err).Warnf("Failed to flush the directory services cache (output=%#q)", output)
+	}
+	if _, got, err := lookupDSUser(ctx, name); err != nil || got != dst {
+		return fmt.Errorf("directory services still reports home %#q for user %#q: %w", got, name, err)
+	}
+	return nil
+}
+
+// waitFor calls check every 2 seconds until it returns nil or timeout passes.
+func waitFor(ctx context.Context, timeout time.Duration, check func() error) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := check()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("gave up after %v: %w", timeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// kcpasswordKey is the fixed XOR key macOS loginwindow uses to obfuscate the
+// automatic login password in /etc/kcpassword.
+var kcpasswordKey = []byte{0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F}
+
+// encodeKCPassword returns pw in /etc/kcpassword format: XORed with
+// kcpasswordKey and zero-padded to the next multiple of 12 bytes, always
+// adding at least one byte so loginwindow finds the terminator.
+func encodeKCPassword(pw string) []byte {
+	b := make([]byte, (len(pw)/12+1)*12)
+	copy(b, pw)
+	for i := range b {
+		b[i] ^= kcpasswordKey[i%len(kcpasswordKey)]
+	}
+	return b
+}
+
+// enableAutoLogin turns on automatic login for the user, as
+// VZMacGuestProvisioningOptions would have, and restarts loginwindow if no one
+// is logged in so that it takes effect on this boot.
+func enableAutoLogin(ctx context.Context, name, pw string) error {
+	if err := os.WriteFile("/etc/kcpassword", encodeKCPassword(pw), 0o600); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", "-string", name)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
+	}
+	logrus.Infof("Enabled automatic login for user %#q", name)
+	// /dev/console belongs to root at the login window and to the user after login.
+	var st syscall.Stat_t
+	if err := syscall.Stat("/dev/console", &st); err != nil || st.Uid != 0 {
+		return err
+	}
+	cmd = exec.CommandContext(ctx, "killall", "loginwindow")
+	logrus.Infof("Executing command: %v", cmd.Args)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
+	}
 	return nil
 }
 

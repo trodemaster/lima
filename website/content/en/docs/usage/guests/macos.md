@@ -134,12 +134,14 @@ osOpts:
       enablesRemoteLogin: true
 ```
 
-The account is the Lima user: `user.comment` is its full name and `user.name` its
-username, which defaults to your host username followed by `.guest`, like the home
-directory Lima uses for other macOS guests, so that it cannot clash with your host
-home directory when that is mounted in the guest.
-Setup Assistant creates the home directory at `/Users/<user.name>`, so
-`user.home` must be left at that value.
+The account is the Lima user: `user.name` is its username and `user.comment` its
+full name. Setup Assistant always creates the home directory at
+`/Users/<user.name>`. Lima's usual home for macOS guests is
+`/Users/<user.name>.guest`, which cannot clash with your host home directory
+when that is mounted in the guest, so on the first boot the guest moves the home
+to `user.home` before the user logs in. When it does, the guest turns on
+automatic login itself (if `logsInAutomatically` is set) after the move, rather
+than having Setup Assistant log the user in with the old home.
 
 macOS only reads these settings on the first boot after installation, so they
 have no effect on an existing instance. Guests older than macOS 27 ignore them,

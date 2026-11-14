@@ -147,6 +147,7 @@ type TemplateArgs struct {
 	GuestOSVersion                  string // macOS guests only: restore-image OS version, e.g. "27.0.0"; empty otherwise
 	GuestOSBuildVersion             string // macOS guests only: restore-image build, e.g. "26A428"; empty otherwise
 	GuestProvisioningPassword       string // macOS guests only: set while Setup Assistant provisions the user on first boot
+	GuestProvisioningAutoLogin      bool   // macOS guests only: the guest turns on automatic login after moving the provisioned home
 }
 
 func (t *TemplateArgs) generateWindowsInitialPassword() error {
