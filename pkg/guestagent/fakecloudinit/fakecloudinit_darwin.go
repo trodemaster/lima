@@ -431,8 +431,8 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 
 // adoptProvisionedUser waits for Setup Assistant to create the user from
 // VZMacGuestProvisioningOptions, then installs Lima's files into that account.
-// The account's home directory is the one Setup Assistant chose, which differs
-// from the Lima default (/Users/<user>.guest).
+// Setup Assistant always creates the home at /Users/<user>, so it is moved to
+// user.home (default /Users/<user>.guest) when they differ.
 func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw string) error {
 	logrus.Infof("Waiting for Setup Assistant to create user %#q from guest provisioning", u.Name)
 	var (
