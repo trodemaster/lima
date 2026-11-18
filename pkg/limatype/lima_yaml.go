@@ -371,6 +371,9 @@ type DarwinOpts struct {
 	// SuppressFirstLoginSetupPlist overrides the built-in com.apple.SetupAssistant.plist content
 	// used by SuppressFirstLoginSetup. Ignored unless SuppressFirstLoginSetup is true.
 	SuppressFirstLoginSetupPlist *string `yaml:"suppressFirstLoginSetupPlist,omitempty" json:"suppressFirstLoginSetupPlist,omitempty" jsonschema:"nullable"`
+	// AutoLogin logs the Lima user in automatically when the guest boots (Darwin guests only).
+	// It is turned on when the user is created, so it takes effect from the second boot.
+	AutoLogin *bool `yaml:"autoLogin,omitempty" json:"autoLogin,omitempty" jsonschema:"nullable"`
 }
 
 func NewOS(osname string) OS {

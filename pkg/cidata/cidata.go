@@ -176,6 +176,7 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 
 		SuppressFirstLoginSetup:      darwinOpts.SuppressFirstLoginSetup != nil && *darwinOpts.SuppressFirstLoginSetup,
 		SuppressFirstLoginSetupPlist: suppressFirstLoginSetupPlist,
+		AutoLogin:                    darwinOpts.AutoLogin != nil && *darwinOpts.AutoLogin,
 		GuestOSVersion:               guestOSVersion,
 		GuestOSBuildVersion:          guestOSBuildVersion,
 	}
@@ -459,6 +460,14 @@ func GenerateISO9660(ctx context.Context, drv driver.Driver, instDir, name strin
 		layout = append(layout, iso9660util.Entry{
 			Path:   "setup-assistant.plist",
 			Reader: strings.NewReader(args.SuppressFirstLoginSetupPlist),
+		})
+	}
+	if args.AutoLogin {
+		// Presence of this empty file (not any cloud-config key) tells the guest-side
+		// fakecloudinit to turn on automatic login for the user it creates.
+		layout = append(layout, iso9660util.Entry{
+			Path:   "auto-login",
+			Reader: strings.NewReader(""),
 		})
 	}
 

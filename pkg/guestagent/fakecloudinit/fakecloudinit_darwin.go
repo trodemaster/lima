@@ -436,6 +436,53 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 			return fmt.Errorf("failed to write sudoers file for user %#q: %w", u.Name, err)
 		}
 	}
+	maybeEnableAutoLogin(ctx, mnt, u.Name, pw)
+	return nil
+}
+
+// maybeEnableAutoLogin turns on automatic login for the user if osOpts.Darwin.autoLogin
+// is set. Presence of auto-login on the cidata volume (not any cloud-config key) is what
+// signals this feature is enabled -- see GenerateISO9660.
+func maybeEnableAutoLogin(ctx context.Context, mnt, name, pw string) {
+	if _, statErr := os.Stat(filepath.Join(mnt, "auto-login")); statErr != nil {
+		return
+	}
+	if err := enableAutoLogin(ctx, name, pw); err != nil {
+		// Non-fatal: the guest is still reachable over SSH.
+		logrus.WithError(err).Warnf("Failed to enable automatic login for user %#q", name)
+	}
+}
+
+// kcpasswordKey is the fixed key that loginwindow uses to obfuscate the automatic
+// login password in /etc/kcpassword. The format is not documented by Apple; it has
+// been unchanged since at least OS X 10.7.
+var kcpasswordKey = []byte{0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F}
+
+// encodeKCPassword returns pw in /etc/kcpassword format: XORed with kcpasswordKey
+// and zero-padded to the next multiple of 12 bytes, always adding at least one byte
+// so that loginwindow finds the terminator.
+func encodeKCPassword(pw string) []byte {
+	b := make([]byte, (len(pw)/12+1)*12)
+	copy(b, pw)
+	for i := range b {
+		b[i] ^= kcpasswordKey[i%len(kcpasswordKey)]
+	}
+	return b
+}
+
+// enableAutoLogin turns on automatic login for the user. `sysadminctl -autologin set`
+// cannot be used here: it needs the Security Agent, which a LaunchDaemon at boot does
+// not have, and then fails without an error. loginwindow reads the setting when it
+// starts, so it takes effect from the next boot.
+func enableAutoLogin(ctx context.Context, name, pw string) error {
+	if err := os.WriteFile("/etc/kcpassword", encodeKCPassword(pw), 0o600); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "defaults", "write", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser", "-string", name)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
+	}
+	logrus.Infof("Enabled automatic login for user %#q from the next boot", name)
 	return nil
 }
 

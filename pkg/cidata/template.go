@@ -144,6 +144,7 @@ type TemplateArgs struct {
 	TPM                             bool
 	SuppressFirstLoginSetup         bool
 	SuppressFirstLoginSetupPlist    string // empty = use built-in plist
+	AutoLogin                       bool   // macOS guests only
 	GuestOSVersion                  string // macOS guests only: restore-image OS version, e.g. "27.0.0"; empty otherwise
 	GuestOSBuildVersion             string // macOS guests only: restore-image build, e.g. "26A428"; empty otherwise
 }
