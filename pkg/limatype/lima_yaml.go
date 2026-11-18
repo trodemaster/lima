@@ -374,6 +374,9 @@ type DarwinOpts struct {
 	// TCCPermissions adds entries to the guest's system TCC database while the disk is
 	// patched, before the first boot. Applied once, when the disk is created.
 	TCCPermissions []TCCPermission `yaml:"tccPermissions,omitempty" json:"tccPermissions,omitempty" jsonschema:"nullable"`
+	// AutoLogin logs the Lima user in automatically when the guest boots (Darwin guests only).
+	// It is turned on when the user is created, so it takes effect from the second boot.
+	AutoLogin *bool `yaml:"autoLogin,omitempty" json:"autoLogin,omitempty" jsonschema:"nullable"`
 }
 
 // TCCPermission names a built-in set of entries for the guest's system TCC database,

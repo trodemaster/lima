@@ -148,6 +148,29 @@ but doesn't honor all of them (for example, an Accessibility entry for
 Terminal has no effect on macOS 26 and 27 guests), so Lima only offers
 entries that are known to work.
 
+### Automatic login
+| ⚡ Requirement | Lima >= 2.4, macOS >= 13.0 |
+|-------------------|-----------------------------|
+
+By default the guest boots to the login window. Set `osOpts.Darwin.autoLogin` to
+have Lima turn on automatic login for the Lima user when it creates the account,
+so that GUI sessions (for example a CI runner that needs the window server) start
+without anyone logging in:
+
+```yaml
+osOpts:
+  Darwin:
+    autoLogin: true
+```
+
+macOS reads the setting when the login window starts, so automatic login takes
+effect from the second boot of a new instance. It stores a copy of the password
+Lima generated (`~/password`), so changing the account password breaks automatic
+login; turn it on again in System Settings > Users & Groups afterwards. Automatic
+login is not available while FileVault is on.
+
+**Default:** `false`
+
 ## Caveats
 - No support for turning off the video display.
 - No support for automatic port forwarding.
