@@ -107,19 +107,21 @@ func processUserData(ctx context.Context, mnt string) error {
 	if userData.PackageRebootIfRequired {
 		logrus.Warn("package_reboot_if_required is not implemented")
 	}
-	for _, m := range userData.Mounts {
-		if err = mountFSTabEntry(m); err != nil {
-			errs = append(errs, fmt.Errorf("failed to mount fstab entry %v: %w", m, err))
-		}
-	}
 	if userData.Timezone != "" {
 		if err = setTimezone(ctx, userData.Timezone); err != nil {
 			errs = append(errs, fmt.Errorf("failed to set timezone: %w", err))
 		}
 	}
+	// Create the users before mounting: a mount is a symlink created without its
+	// parent directories, so a mount point inside a user's home needs the home.
 	for _, u := range userData.Users {
 		if err := createUser(ctx, &u, mnt); err != nil {
 			errs = append(errs, fmt.Errorf("failed to create user %#q: %w", u.Name, err))
+		}
+	}
+	for _, m := range userData.Mounts {
+		if err = mountFSTabEntry(m); err != nil {
+			errs = append(errs, fmt.Errorf("failed to mount fstab entry %v: %w", m, err))
 		}
 	}
 	for _, entry := range userData.WriteFiles {
