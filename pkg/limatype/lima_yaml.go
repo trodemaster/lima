@@ -371,6 +371,16 @@ type DarwinOpts struct {
 	// SuppressFirstLoginSetupPlist overrides the built-in com.apple.SetupAssistant.plist content
 	// used by SuppressFirstLoginSetup. Ignored unless SuppressFirstLoginSetup is true.
 	SuppressFirstLoginSetupPlist *string `yaml:"suppressFirstLoginSetupPlist,omitempty" json:"suppressFirstLoginSetupPlist,omitempty" jsonschema:"nullable"`
+	// TCCPermissions adds entries to the guest's system TCC database while the disk is
+	// patched, before the first boot. Applied once, when the disk is created.
+	TCCPermissions []TCCPermission `yaml:"tccPermissions,omitempty" json:"tccPermissions,omitempty" jsonschema:"nullable"`
+}
+
+// TCCPermission names a built-in set of entries for the guest's system TCC database,
+// written during disk patching.
+type TCCPermission struct {
+	// Preset is one of "sshd-full-disk-access" or "lima-guestagent-full-disk-access".
+	Preset string `yaml:"preset,omitempty" json:"preset,omitempty"`
 }
 
 func NewOS(osname string) OS {

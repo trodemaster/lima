@@ -116,6 +116,38 @@ When `suppressFirstLoginSetupPlist` is supplied, it is used verbatim — no
 template above, then supply the actual build and version strings for your
 target OS release if needed.
 
+### Pre-populating TCC permissions
+| ⚡ Requirement | Lima >= 2.4 |
+|-------------------|-----------------------------|
+
+macOS uses the Transparency, Consent, and Control (TCC) framework to gate
+access to sensitive services such as Full Disk Access. Some of these can
+only be granted in System Settings, for example "Allow full disk access for
+remote users", which blocks unattended or automated setups.
+
+`osOpts.Darwin.tccPermissions` lets Lima write entries into the guest's
+system TCC database during initial disk setup, before the VM boots for the
+first time, so the permissions are already in place when the guest starts.
+The entries are written once, when the disk is created; changing them later
+has no effect on an existing instance.
+
+| Preset | Effect |
+|--------|--------|
+| `sshd-full-disk-access` | Full Disk Access for SSH sessions (`/usr/libexec/sshd-keygen-wrapper`), as "Allow full disk access for remote users" in System Settings |
+| `lima-guestagent-full-disk-access` | Full Disk Access for the Lima guest agent on the cidata volume |
+
+```yaml
+osOpts:
+  Darwin:
+    tccPermissions:
+      - preset: sshd-full-disk-access
+```
+
+Only these presets are supported. macOS keeps every entry written this way
+but doesn't honor all of them (for example, an Accessibility entry for
+Terminal has no effect on macOS 26 and 27 guests), so Lima only offers
+entries that are known to work.
+
 ## Caveats
 - No support for turning off the video display.
 - No support for automatic port forwarding.
