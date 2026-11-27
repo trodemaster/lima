@@ -186,3 +186,40 @@ func installMacOS(ctx context.Context, vm *vz.VirtualMachine, ipsw string) error
 	}
 	return nil
 }
+
+// guestProvisioningStartOptions returns the start options that make Setup
+// Assistant create the Lima user on this boot, if prepareGuestProvisioning marked
+// the instance for guest provisioning and it has not been started yet.
+func guestProvisioningStartOptions(inst *limatype.Instance) ([]vz.VirtualMachineStartOption, error) {
+	if _, err := os.Stat(filepath.Join(inst.Dir, filenames.VzGuestProvisioning)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	pw, err := os.ReadFile(filepath.Join(inst.Dir, filenames.VzGuestPassword))
+	if err != nil {
+		return nil, err
+	}
+	username := *inst.Config.User.Name
+	fullName := *inst.Config.User.Comment
+	if fullName == "" {
+		// Setup Assistant requires a full name.
+		fullName = username
+	}
+	opts, err := vz.NewMacGuestProvisioningOptions(fullName, username, string(pw),
+		// The guest agent moves the home to user.home after Setup Assistant has
+		// created the account, which is only safe while the user is logged out.
+		// It turns automatic login on afterwards if osOpts.Darwin.autoLogin is set.
+		vz.WithGuestAutomaticLogin(false),
+		// The guest agent enables sshd itself, as for older guests.
+		vz.WithGuestRemoteLogin(false),
+	)
+	if err != nil {
+		// vz returns ErrUnsupportedOSVersion on hosts older than macOS 27;
+		// prepareGuestProvisioning should already have skipped those.
+		return nil, fmt.Errorf("failed to create guest provisioning options: %w", err)
+	}
+	logrus.Infof("Provisioning guest user %#q on first boot", username)
+	return []vz.VirtualMachineStartOption{vz.WithGuestProvisioningOptions(opts)}, nil
+}

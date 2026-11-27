@@ -126,3 +126,31 @@ osOpts:
 		assert.NilError(t, err)
 	})
 }
+
+func TestGuestProvisioningSkipReason(t *testing.T) {
+	cases := []struct {
+		name         string
+		hostMajor    int64
+		guestVersion string
+		wantErr      string // substring; "" means provisioning runs
+	}{
+		{"27 host, 27 guest", 27, "27.0.0", ""},
+		{"28 host, 27 guest", 28, "27.1.0", ""},
+		{"27 host, 26 guest", 27, "26.6.0", "needs macOS 27 or later"},
+		{"26 host, 26 guest", 26, "26.6.0", "needs macOS 27 or later"},
+		{"26 host, 27 guest", 26, "27.0.0", "host must be macOS 27 or later"},
+		{"unknown guest", 27, "", "unknown"},
+		{"unparsable guest", 27, "x.y", "cannot parse"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := guestProvisioningSkipReason(tc.hostMajor, tc.guestVersion)
+			if tc.wantErr == "" {
+				assert.NilError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+	assert.Assert(t, errors.Is(guestProvisioningSkipReason(26, "27.0.0"), errGuestProvisioningNeedsNewerHost))
+}

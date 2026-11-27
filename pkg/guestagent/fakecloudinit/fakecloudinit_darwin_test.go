@@ -26,3 +26,37 @@ func TestEncodeKCPassword(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDSCLRead(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want map[string]string
+	}{
+		{
+			name: "single-line values",
+			out:  "NFSHomeDirectory: /Users/lima\nUniqueID: 501\n",
+			want: map[string]string{"NFSHomeDirectory": "/Users/lima", "UniqueID": "501"},
+		},
+		{
+			name: "value on the next line",
+			out:  "NFSHomeDirectory:\n /Users/Lima User\nUniqueID: 502\n",
+			want: map[string]string{"NFSHomeDirectory": "/Users/Lima User", "UniqueID": "502"},
+		},
+		{
+			name: "missing attribute",
+			out:  "NFSHomeDirectory: /Users/lima\n",
+			want: map[string]string{"NFSHomeDirectory": "/Users/lima"},
+		},
+		{
+			name: "no trailing newline",
+			out:  "UniqueID: 501",
+			want: map[string]string{"UniqueID": "501"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.DeepEqual(t, parseDSCLRead(tc.out), tc.want)
+		})
+	}
+}

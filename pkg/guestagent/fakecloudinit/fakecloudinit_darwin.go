@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/goccy/go-yaml"
 	"github.com/sethvargo/go-password/password"
@@ -114,6 +115,9 @@ func processUserData(ctx context.Context, mnt string) error {
 	}
 	// Create the users before mounting: a mount is a symlink created without its
 	// parent directories, so a mount point inside a user's home needs the home.
+	// On macOS 27 and later, Setup Assistant also creates the home at /Users/<user>,
+	// where the host home is mounted by default, and the guest agent must move it
+	// to user.home before that path becomes a mount.
 	for _, u := range userData.Users {
 		if err := createUser(ctx, &u, mnt); err != nil {
 			errs = append(errs, fmt.Errorf("failed to create user %#q: %w", u.Name, err))
@@ -339,6 +343,21 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 	if homedir == "" {
 		return fmt.Errorf("homedir is required for user %#q", u.Name)
 	}
+	// With VZMacGuestProvisioningOptions (macOS 27+), Setup Assistant creates the
+	// user on the first boot, so adopt that account instead of creating one.
+	// Presence of guest-provisioning-password on the cidata volume is what signals
+	// this; see GenerateISO9660.
+	if pw, err := os.ReadFile(filepath.Join(mnt, "guest-provisioning-password")); err == nil {
+		// The file stays on cidata on later boots. The account is set up once
+		// Lima's authorized_keys is in place (the home may already exist before
+		// that: Setup Assistant creates it). Until then, for example when the first
+		// boot was interrupted after Setup Assistant created the account, adopt it.
+		if osutil.FileExists(filepath.Join(homedir, ".ssh", "authorized_keys")) {
+			logrus.Debugf("user %#q is already set up, skipping", u.Name)
+			return nil
+		}
+		return adoptProvisionedUser(ctx, u, mnt, string(pw))
+	}
 	if osutil.FileExists(homedir) {
 		logrus.Debugf("homedir %#q already exists, skipping user creation for user %#q", homedir, u.Name)
 		return nil
@@ -419,6 +438,186 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 	logrus.Infof("Created user %#q. The password is stored in %#q", u.Name, filepath.Join(homedir, "password"))
 	maybeEnableAutoLogin(ctx, mnt, u.Name, pw)
 	return nil
+}
+
+// adoptProvisionedUser waits for Setup Assistant to create the user from
+// VZMacGuestProvisioningOptions, then installs Lima's files into that account.
+// Setup Assistant always creates the home at /Users/<user>, so it is moved to
+// user.home (default /Users/<user>.guest) when they differ.
+func adoptProvisionedUser(ctx context.Context, u *cloudinittypes.User, mnt, pw string) error {
+	logrus.Infof("Waiting for Setup Assistant to create user %#q from guest provisioning", u.Name)
+	var (
+		uid     int
+		homedir string
+	)
+	if err := waitFor(ctx, 10*time.Minute, func() (err error) {
+		uid, homedir, err = lookupDSUser(ctx, u.Name)
+		return err
+	}); err != nil {
+		return fmt.Errorf("user %#q was not created by Setup Assistant: %w", u.Name, err)
+	}
+	// Setup Assistant writes .AppleSetupDone when it finishes, after it has
+	// created the home. Wait for it even if the home stays where it is, so that
+	// Lima's files are not written while Setup Assistant is still working.
+	if err := waitFor(ctx, 10*time.Minute, func() error {
+		if !osutil.FileExists("/var/db/.AppleSetupDone") {
+			return errors.New("setup assistant has not finished")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if u.UID != "" && u.UID != strconv.Itoa(uid) {
+		logrus.Warnf("Requested UID %s for user %#q, but Setup Assistant assigned UID %d; using the actual UID", u.UID, u.Name, uid)
+	}
+	if filepath.Clean(homedir) != filepath.Clean(u.Homedir) {
+		if err := moveProvisionedHome(ctx, u.Name, uid, homedir, u.Homedir); err != nil {
+			// The boot scripts use user.home, so make it lead to the account's home.
+			logrus.WithError(err).Warnf("Keeping home %#q created by Setup Assistant; linking %#q to it", homedir, u.Homedir)
+			if err := os.Symlink(homedir, u.Homedir); err != nil && !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("failed to link %#q to %#q: %w", u.Homedir, homedir, err)
+			}
+		} else {
+			homedir = u.Homedir
+		}
+	}
+	if _, statErr := os.Stat(filepath.Join(mnt, "setup-assistant.plist")); statErr == nil {
+		if err := suppressFirstLoginScreens(ctx, mnt, uid, homedir); err != nil {
+			logrus.WithError(err).Warnf("Failed to suppress first-login screens for user %#q", u.Name)
+		}
+	}
+	// As for a user created with sysadminctl.
+	if err := os.Chmod(homedir, 0o700); err != nil {
+		return fmt.Errorf("failed to chmod %#q: %w", homedir, err)
+	}
+	if err := installUserFiles(u, uid, homedir, pw); err != nil {
+		return err
+	}
+	logrus.Infof("Adopted user %#q created by Setup Assistant (uid %d, home %#q). The password is stored in %#q",
+		u.Name, uid, homedir, filepath.Join(homedir, "password"))
+	// The provisioning options leave automatic login off (see moveProvisionedHome),
+	// so turn it on here, after the home has moved, as for a sysadminctl-created user.
+	maybeEnableAutoLogin(ctx, mnt, u.Name, pw)
+	return nil
+}
+
+// moveProvisionedHome moves the home directory Setup Assistant created (always
+// /Users/<name>; VZMacGuestProvisioningOptions cannot choose it) to the Lima home.
+// The caller waits for Setup Assistant to finish. The home is only moved while
+// nothing runs as the user, since a logged-in session keeps using the old path.
+// The vz driver turns automatic login off in the provisioning options so the
+// user stays logged out.
+func moveProvisionedHome(ctx context.Context, name string, uid int, src, dst string) error {
+	// Setup Assistant leaves a background launchd session running for the new
+	// user (cfprefsd, secd, lsd, trustd, distnoted, ...) although nobody has
+	// logged in; those processes keep the old home open. End that session.
+	userDomain := "user/" + strconv.Itoa(uid)
+	cmd := exec.CommandContext(ctx, "launchctl", "bootout", userDomain)
+	logrus.Infof("Executing command: %v", cmd.Args)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		logrus.WithError(err).Warnf("Failed to end the launchd session of uid %d (output=%#q)", uid, output)
+	}
+	if err := waitFor(ctx, time.Minute, func() error {
+		// pgrep exits 1 when no process matches.
+		out, err := exec.CommandContext(ctx, "pgrep", "-l", "-U", strconv.Itoa(uid)).Output()
+		if err == nil {
+			return fmt.Errorf("processes are running as uid %d: %#q", uid, strings.TrimSpace(string(out)))
+		}
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return err
+	}
+	if fi, err := os.Lstat(src); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("%#q is not a directory (mode %v)", src, fi.Mode().Type())
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%#q already exists", dst)
+	}
+	logrus.Infof("Moving home of user %#q from %#q to %#q", name, src, dst)
+	if err := os.Rename(src, dst); err != nil {
+		return err
+	}
+	cmd = exec.CommandContext(ctx, "dscl", ".", "-create", "/Users/"+name, "NFSHomeDirectory", dst)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if rerr := os.Rename(dst, src); rerr != nil {
+			logrus.WithError(rerr).Errorf("Failed to move %#q back to %#q", dst, src)
+		}
+		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
+	}
+	if output, err := exec.CommandContext(ctx, "dscacheutil", "-flushcache").CombinedOutput(); err != nil {
+		logrus.WithError(err).Warnf("Failed to flush the directory services cache (output=%#q)", output)
+	}
+	_, got, err := lookupDSUser(ctx, name)
+	if err != nil {
+		return err
+	}
+	if got != dst {
+		return fmt.Errorf("directory services still reports home %#q for user %#q", got, name)
+	}
+	return nil
+}
+
+// waitFor calls check every 2 seconds until it returns nil or timeout passes.
+func waitFor(ctx context.Context, timeout time.Duration, check func() error) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := check()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("gave up after %v: %w", timeout, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// lookupDSUser returns the UID and home directory of a local directory services user.
+func lookupDSUser(ctx context.Context, name string) (uid int, homedir string, err error) {
+	out, err := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+name, "UniqueID", "NFSHomeDirectory").Output()
+	if err != nil {
+		return 0, "", fmt.Errorf("user %#q not found in directory services: %w", name, err)
+	}
+	attrs := parseDSCLRead(string(out))
+	uid, err = strconv.Atoi(attrs["UniqueID"])
+	if err != nil || attrs["NFSHomeDirectory"] == "" {
+		return 0, "", fmt.Errorf("failed to parse directory services record for user %#q (output=%#q)", name, out)
+	}
+	return uid, attrs["NFSHomeDirectory"], nil
+}
+
+// parseDSCLRead parses the output of `dscl . -read <path> <attr>...` for
+// single-valued attributes. dscl prints "Key: value", or "Key:" followed by
+// the value on an indented line when the value contains a space.
+func parseDSCLRead(out string) map[string]string {
+	attrs := make(map[string]string)
+	var key string
+	for line := range strings.Lines(out) {
+		line = strings.TrimRight(line, "\n")
+		if strings.HasPrefix(line, " ") {
+			if key != "" {
+				attrs[key] = strings.TrimSpace(line)
+			}
+			continue
+		}
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			key = ""
+			continue
+		}
+		key = k
+		attrs[key] = strings.TrimSpace(v)
+	}
+	return attrs
 }
 
 // installUserFiles writes the password file, SSH authorized keys and sudoers

@@ -171,6 +171,32 @@ login is not available while FileVault is on.
 
 **Default:** `false`
 
+### Guest provisioning
+| ⚡ Requirement | Lima >= 2.4, macOS >= 27.0 on both host and guest |
+|-------------------|-----------------------------|
+
+When both the host and the guest run macOS 27 or later, Lima creates the guest
+user with the Virtualization framework's guest provisioning
+([`VZMacGuestProvisioningOptions`](https://developer.apple.com/documentation/virtualization/vzmacguestprovisioningoptions))
+instead of `sysadminctl`: on the first boot after installation, Setup Assistant
+creates the account from the Lima user (`user.name`, with `user.comment` as the
+full name), and Lima then sets it up as usual (SSH keys, `~/password`, sudo).
+Nothing needs to be configured, and older guests are set up as before.
+
+Setup Assistant always creates the home directory at `/Users/<user.name>`, so on
+the first boot the guest moves it to `user.home` (`/Users/<user.name>.guest` by
+default, which cannot clash with the host home directory mounted in the guest)
+before anyone logs in. macOS only lets a process with Full Disk Access move a
+home directory, so Lima adds the
+[`lima-guestagent-full-disk-access`](#pre-populating-tcc-permissions) TCC permission for these
+guests. [`osOpts.Darwin.autoLogin`](#automatic-login) is turned on after the move,
+as for older guests.
+
+macOS only applies guest provisioning on the first boot after installation, so it
+has no effect on existing instances. If that boot is interrupted after Setup
+Assistant has created the account, the next boot moves the home and finishes the
+setup. If it is interrupted before, delete the instance and create it again.
+
 ## Caveats
 - No support for turning off the video display.
 - No support for automatic port forwarding.

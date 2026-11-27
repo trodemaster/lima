@@ -132,12 +132,21 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 	}
 	archive := "nerdctl-full.tgz"
 	var darwinOpts limatype.DarwinOpts
-	var guestOSVersion, guestOSBuildVersion string
+	var guestOSVersion, guestOSBuildVersion, guestProvisioningPassword string
 	if *instConfig.OS == limatype.DARWIN {
 		if err := limayaml.Convert(instConfig.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.Darwin"); err != nil {
 			return nil, err
 		}
 		guestOSVersion, guestOSBuildVersion = store.ReadGuestOSVersion(instDir)
+		// The vz driver writes this file when Setup Assistant creates the user from
+		// VZMacGuestProvisioningOptions on the first boot (macOS 27 or later). It is
+		// kept, so that a later boot can still adopt the account if the first one
+		// was interrupted.
+		if b, err := os.ReadFile(filepath.Join(instDir, filenames.VzGuestPassword)); err == nil {
+			guestProvisioningPassword = string(b)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 	}
 	var suppressFirstLoginSetupPlist string
 	if darwinOpts.SuppressFirstLoginSetupPlist != nil {
@@ -179,6 +188,7 @@ func templateArgs(ctx context.Context, bootScripts bool, instDir, name string, i
 		AutoLogin:                    darwinOpts.AutoLogin != nil && *darwinOpts.AutoLogin,
 		GuestOSVersion:               guestOSVersion,
 		GuestOSBuildVersion:          guestOSBuildVersion,
+		GuestProvisioningPassword:    guestProvisioningPassword,
 	}
 
 	firstUsernetIndex := limayaml.FirstUsernetIndex(instConfig)
@@ -468,6 +478,15 @@ func GenerateISO9660(ctx context.Context, drv driver.Driver, instDir, name strin
 		layout = append(layout, iso9660util.Entry{
 			Path:   "auto-login",
 			Reader: strings.NewReader(""),
+		})
+	}
+	if args.GuestProvisioningPassword != "" {
+		// Presence of this file (not any cloud-config key) tells the guest agent that
+		// Setup Assistant creates the user from VZMacGuestProvisioningOptions, so it
+		// must adopt that account instead of creating one.
+		layout = append(layout, iso9660util.Entry{
+			Path:   "guest-provisioning-password",
+			Reader: strings.NewReader(args.GuestProvisioningPassword),
 		})
 	}
 

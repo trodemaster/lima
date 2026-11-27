@@ -76,6 +76,8 @@ VZ:
 - `vz-guest-os-version`: macOS version of the restore image a Mac VM was created from, e.g. `27.0.0` (written once, at create time)
 - `vz-guest-os-build-version`: build number of that restore image, e.g. `26A428`
 - `vz-aux`: Auxiliary storage for a Mac VM
+- `vz-guest-provisioning`: empty marker of a macOS 27+ guest, present from create time until the first start passes the guest provisioning options
+- `vz-guest-password`: initial password of the user Setup Assistant creates in a macOS 27+ guest
 - `vz-efi`: EFIVariable store file for a VM
 
 Serial:

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -37,23 +38,53 @@ func attachImageWithRetry(ctx context.Context, disk string, retry int) (*asifuti
 	return attached, err
 }
 
+// PatchOptions configures Patch.
+type PatchOptions struct {
+	// GuestProvisioning prepares the disk for a macOS 27 or later guest whose user
+	// account Setup Assistant creates from the VZMacGuestProvisioningOptions passed
+	// at start. It leaves out the markers that skip Setup Assistant, so that it runs
+	// on the first boot, and grants the guest agent Full Disk Access, which macOS
+	// requires to move the home directory Setup Assistant creates (both renaming it
+	// and changing NFSHomeDirectory fail with EPERM without it).
+	GuestProvisioning bool
+}
+
+// guestProvisioningTCCPermissions are added to the TCC permissions when
+// PatchOptions.GuestProvisioning is set.
+var guestProvisioningTCCPermissions = []limatype.TCCPermission{
+	{Preset: "lima-guestagent-full-disk-access"},
+}
+
+// setupAssistantMarkers are the files that make macOS skip Setup Assistant,
+// relative to the Data volume root.
+var setupAssistantMarkers = []string{
+	"private/var/db/.AppleSetupDone",
+	"Library/User Template/.skipbuddy",
+}
+
 // Patch prepares a macOS guest disk for first boot. It writes the
 // LaunchDaemon plist, init script, setup markers, and optional TCC
 // permission entries via a noowners mount, then fixes file ownership
 // by patching APFS inode records directly on the raw disk image.
 // No sudo required.
-func Patch(ctx context.Context, disk string, tccPerms []limatype.TCCPermission) error {
-	tccPaths, err := patchWriteGuestFiles(ctx, disk, tccPerms)
+func Patch(ctx context.Context, disk string, tccPerms []limatype.TCCPermission, opts PatchOptions) error {
+	var markers []string
+	if opts.GuestProvisioning {
+		tccPerms = append(slices.Clone(tccPerms), guestProvisioningTCCPermissions...)
+	} else {
+		markers = setupAssistantMarkers
+	}
+	tccPaths, err := patchWriteGuestFiles(ctx, disk, markers, tccPerms)
 	if err != nil {
 		return err
 	}
-	return patchFixOwnership(ctx, disk, tccPaths)
+	return patchFixOwnership(ctx, disk, append(slices.Clone(markers), tccPaths...))
 }
 
 // patchWriteGuestFiles attaches the disk image, mounts the Data
 // volume with noowners, writes guest files, then detaches.
 // Returns the relative paths of any new filesystem entries created for TCC.
-func patchWriteGuestFiles(ctx context.Context, disk string, tccPerms []limatype.TCCPermission) ([]string, error) {
+func patchWriteGuestFiles(ctx context.Context, disk string, markers []string, tccPerms []limatype.TCCPermission) ([]string, error) {
 	attached, err := attachImageWithRetry(ctx, disk, 3)
 	if err != nil {
 		return nil, fmt.Errorf("failed to attach disk: %w", err)
@@ -79,7 +110,7 @@ func patchWriteGuestFiles(ctx context.Context, disk string, tccPerms []limatype.
 			logrus.WithError(err).Warnf("failed to remove mount point %#q", mnt)
 		}
 	}()
-	return writeGuestFiles(ctx, dataDevPath, mnt, tccPerms)
+	return writeGuestFiles(ctx, dataDevPath, mnt, markers, tccPerms)
 }
 
 // patchFixOwnership attaches the disk image and patches APFS inode
@@ -111,8 +142,6 @@ func patchFixOwnership(ctx context.Context, disk string, extraPaths []string) er
 	// to load them, so we patch them to UID 0 / GID 0 directly.
 	containerDev := "/dev/r" + attached.Container
 	paths := []string{
-		"private/var/db/.AppleSetupDone",
-		"Library/User Template/.skipbuddy",
 		"usr/local/sbin",
 		"usr/local/sbin/lima-macos-init.sh",
 		"Library/LaunchDaemons/io.lima-vm.lima-macos-init.plist",
@@ -126,9 +155,9 @@ func patchFixOwnership(ctx context.Context, disk string, extraPaths []string) er
 }
 
 // writeGuestFiles mounts the data volume with noowners and writes the
-// LaunchDaemon plist, init script, setup markers, and optional TCC entries.
+// LaunchDaemon plist, init script, the given setup markers, and optional TCC entries.
 // Returns relative paths of any newly created TCC filesystem entries.
-func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string, tccPerms []limatype.TCCPermission) ([]string, error) {
+func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string, markers []string, tccPerms []limatype.TCCPermission) ([]string, error) {
 	// Mount with "noowners" so non-root users can write to the volume.
 	if err := osutil.Mount(ctx, "apfs", dataSliceDevice, mnt, []string{"noowners"}); err != nil {
 		return nil, err
@@ -139,11 +168,8 @@ func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string, tccPerms 
 		}
 	}()
 
-	filesToTouch := []string{
-		filepath.Join(mnt, "private/var/db/.AppleSetupDone"),
-		filepath.Join(mnt, "Library/User Template/.skipbuddy"),
-	}
-	for _, file := range filesToTouch {
+	for _, marker := range markers {
+		file := filepath.Join(mnt, marker)
 		if err := osutil.Touch(file); err != nil {
 			return nil, fmt.Errorf("failed to touch %#q: %w", file, err)
 		}

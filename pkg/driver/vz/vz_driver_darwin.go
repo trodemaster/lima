@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Code-Hex/vz/v4"
@@ -23,6 +25,7 @@ import (
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/image/asif"
 	"github.com/lima-vm/go-qcow2reader/image/raw"
+	"github.com/sethvargo/go-password/password"
 	"github.com/sirupsen/logrus"
 
 	"github.com/lima-vm/lima/v2/pkg/blockdevice"
@@ -38,6 +41,7 @@ import (
 	"github.com/lima-vm/lima/v2/pkg/osutil"
 	"github.com/lima-vm/lima/v2/pkg/reflectutil"
 	"github.com/lima-vm/lima/v2/pkg/sshutil"
+	"github.com/lima-vm/lima/v2/pkg/store"
 )
 
 var knownYamlProperties = []string{
@@ -438,7 +442,10 @@ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if err := macos.Patch(ctx, disk, tccPerms); err != nil {
+			opts := macos.PatchOptions{
+				GuestProvisioning: osutil.FileExists(filepath.Join(l.Instance.Dir, filenames.VzGuestProvisioning)),
+			}
+			if err := macos.Patch(ctx, disk, tccPerms, opts); err != nil {
 				return err
 			}
 			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
@@ -455,6 +462,7 @@ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
 // The function creates the following files:
 // - `image.ipsw`: hardlink to `image` (".ipsw" suffix is required by VZMacOSInstaller)
 // - `disk`: raw or ASIF disk (ASIF requires macOS 26+)
+// - `vz-guest-provisioning` and `vz-guest-password`: only for a macOS 27+ guest on a macOS 27+ host, see prepareGuestProvisioning
 //
 // After successful installation, `image.ipsw` and `image` are removed.
 func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
@@ -507,6 +515,68 @@ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
 		}
 	}
 
+	return l.prepareGuestProvisioning()
+}
+
+// prepareGuestProvisioning marks a freshly installed macOS guest for guest
+// provisioning on its first boot when both host and guest are macOS 27 or later.
+// Setup Assistant then creates the user account from VZMacGuestProvisioningOptions
+// instead of the guest agent creating it with sysadminctl.
+// The empty vz-guest-provisioning marker is removed after the first start, which
+// is the only one that passes the provisioning options. vz-guest-password holds
+// the account's initial password and is kept, so that a later boot can still
+// adopt the account if the first one was interrupted.
+func (l *LimaVzDriver) prepareGuestProvisioning() error {
+	hostVersion, err := osutil.ProductVersion()
+	if err != nil {
+		return err
+	}
+	guestVersion, _ := store.ReadGuestOSVersion(l.Instance.Dir)
+	if reason := guestProvisioningSkipReason(hostVersion.Major, guestVersion); reason != nil {
+		// Only a host that is too old for the guest is worth a warning; older
+		// guests use the guest agent as before.
+		if errors.Is(reason, errGuestProvisioningNeedsNewerHost) {
+			logrus.WithError(reason).Warn("Not using guest provisioning; the guest agent creates the user instead")
+		} else {
+			logrus.WithError(reason).Debug("Not using guest provisioning")
+		}
+		return nil
+	}
+	const pwLen = 16
+	// Avoid special characters to minimize potential keyboard layout issue in GUI,
+	// as for the password the guest agent generates.
+	pw, err := password.Generate(pwLen, pwLen/4, 0, false, false)
+	if err != nil {
+		return fmt.Errorf("failed to generate password: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(l.Instance.Dir, filenames.VzGuestPassword), []byte(pw), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(l.Instance.Dir, filenames.VzGuestProvisioning), nil, 0o644)
+}
+
+var errGuestProvisioningNeedsNewerHost = errors.New("the host must be macOS 27 or later to provision a macOS 27 or later guest")
+
+// guestProvisioningSkipReason returns why guest provisioning cannot be used
+// with the given host macOS major version and guest macOS version (as read by
+// store.ReadGuestOSVersion), or nil if it can.
+// Guests before macOS 27 silently ignore VZMacGuestProvisioningOptions, so the
+// guest version has to be checked up front rather than relying on an error.
+func guestProvisioningSkipReason(hostMajor int64, guestVersion string) error {
+	if guestVersion == "" {
+		return errors.New("the guest macOS version is unknown")
+	}
+	majorStr, _, _ := strings.Cut(guestVersion, ".")
+	guestMajor, err := strconv.Atoi(majorStr)
+	if err != nil {
+		return fmt.Errorf("cannot parse the guest macOS version %#q: %w", guestVersion, err)
+	}
+	switch {
+	case guestMajor < 27:
+		return fmt.Errorf("the guest is macOS %s, guest provisioning needs macOS 27 or later", guestVersion)
+	case hostMajor < 27:
+		return fmt.Errorf("%w (guest macOS %s)", errGuestProvisioningNeedsNewerHost, guestVersion)
+	}
 	return nil
 }
 

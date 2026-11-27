@@ -74,6 +74,8 @@ const (
 	VzGuestOSVersion        = "vz-guest-os-version"       // macOS guests only; restore-image OS version, e.g. "27.0.0"
 	VzGuestOSBuildVersion   = "vz-guest-os-build-version" // macOS guests only; restore-image build, e.g. "26A428"
 	VzAux                   = "vz-aux"                    // macOS guests only
+	VzGuestProvisioning     = "vz-guest-provisioning"     // macOS 27+ guests only; empty, present until the first start passes the guest provisioning options
+	VzGuestPassword         = "vz-guest-password"         // macOS 27+ guests only; initial password of the user Setup Assistant creates
 	VzEfi                   = "vz-efi"                    // efi variable store
 	QemuEfiCodeFD           = "qemu-efi-code.fd"          // efi code; not always created
 	AnsibleInventoryYAML    = "ansible-inventory.yaml"
