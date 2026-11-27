@@ -15,6 +15,7 @@ import (
 
 	"github.com/lima-vm/lima/v2/pkg/apfs"
 	"github.com/lima-vm/lima/v2/pkg/imgutil/nativeimgutil/asifutil"
+	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
 	"github.com/lima-vm/lima/v2/pkg/osutil"
 )
@@ -37,25 +38,28 @@ func attachImageWithRetry(ctx context.Context, disk string, retry int) (*asifuti
 }
 
 // Patch prepares a macOS guest disk for first boot. It writes the
-// LaunchDaemon plist, init script, and setup markers via a noowners
-// mount, then fixes file ownership by patching APFS inode records
-// directly on the raw disk image. No sudo required.
-func Patch(ctx context.Context, disk string) error {
-	if err := patchWriteGuestFiles(ctx, disk); err != nil {
+// LaunchDaemon plist, init script, setup markers, and optional TCC
+// permission entries via a noowners mount, then fixes file ownership
+// by patching APFS inode records directly on the raw disk image.
+// No sudo required.
+func Patch(ctx context.Context, disk string, tccPerms []limatype.TCCPermission) error {
+	tccPaths, err := patchWriteGuestFiles(ctx, disk, tccPerms)
+	if err != nil {
 		return err
 	}
-	return patchFixOwnership(ctx, disk)
+	return patchFixOwnership(ctx, disk, tccPaths)
 }
 
 // patchWriteGuestFiles attaches the disk image, mounts the Data
 // volume with noowners, writes guest files, then detaches.
-func patchWriteGuestFiles(ctx context.Context, disk string) error {
+// Returns the relative paths of any new filesystem entries created for TCC.
+func patchWriteGuestFiles(ctx context.Context, disk string, tccPerms []limatype.TCCPermission) ([]string, error) {
 	attached, err := attachImageWithRetry(ctx, disk, 3)
 	if err != nil {
-		return fmt.Errorf("failed to attach disk: %w", err)
+		return nil, fmt.Errorf("failed to attach disk: %w", err)
 	}
 	if attached == nil || attached.Data == "" {
-		return errors.New("failed to find data slice in attached disk")
+		return nil, errors.New("failed to find data slice in attached disk")
 	}
 	dataDevPath := "/dev/" + attached.Data
 	defer func() {
@@ -68,19 +72,21 @@ func patchWriteGuestFiles(ctx context.Context, disk string) error {
 	instDir := filepath.Dir(disk)
 	mnt := filepath.Join(instDir, filenames.MntDir)
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
-		return fmt.Errorf("failed to create mount point %#q: %w", mnt, err)
+		return nil, fmt.Errorf("failed to create mount point %#q: %w", mnt, err)
 	}
 	defer func() {
 		if err := os.Remove(mnt); err != nil {
 			logrus.WithError(err).Warnf("failed to remove mount point %#q", mnt)
 		}
 	}()
-	return writeGuestFiles(ctx, dataDevPath, mnt)
+	return writeGuestFiles(ctx, dataDevPath, mnt, tccPerms)
 }
 
 // patchFixOwnership attaches the disk image and patches APFS inode
 // records on the raw container device to set root:wheel ownership.
-func patchFixOwnership(ctx context.Context, disk string) error {
+// extraPaths are paths relative to the Data volume root that were
+// created during patchWriteGuestFiles and also need ownership fixed.
+func patchFixOwnership(ctx context.Context, disk string, extraPaths []string) error {
 	attached, err := attachImageWithRetry(ctx, disk, 3)
 	if err != nil {
 		return fmt.Errorf("failed to attach disk for ownership fix: %w", err)
@@ -104,13 +110,15 @@ func patchFixOwnership(ctx context.Context, disk string) error {
 	// LaunchDaemon plists must be owned by root:wheel for launchd
 	// to load them, so we patch them to UID 0 / GID 0 directly.
 	containerDev := "/dev/r" + attached.Container
-	if err = apfs.Chown(containerDev, apfs.VolRoleData, 0, 0,
+	paths := []string{
 		"private/var/db/.AppleSetupDone",
 		"Library/User Template/.skipbuddy",
 		"usr/local/sbin",
 		"usr/local/sbin/lima-macos-init.sh",
 		"Library/LaunchDaemons/io.lima-vm.lima-macos-init.plist",
-	); err != nil {
+	}
+	paths = append(paths, extraPaths...)
+	if err = apfs.Chown(containerDev, apfs.VolRoleData, 0, 0, paths...); err != nil {
 		return fmt.Errorf("failed to fix file ownership on disk: %w", err)
 	}
 
@@ -118,11 +126,12 @@ func patchFixOwnership(ctx context.Context, disk string) error {
 }
 
 // writeGuestFiles mounts the data volume with noowners and writes the
-// LaunchDaemon plist, init script, and setup markers.
-func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string) error {
+// LaunchDaemon plist, init script, setup markers, and optional TCC entries.
+// Returns relative paths of any newly created TCC filesystem entries.
+func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string, tccPerms []limatype.TCCPermission) ([]string, error) {
 	// Mount with "noowners" so non-root users can write to the volume.
 	if err := osutil.Mount(ctx, "apfs", dataSliceDevice, mnt, []string{"noowners"}); err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err := osutil.Umount(ctx, mnt); err != nil {
@@ -136,7 +145,7 @@ func writeGuestFiles(ctx context.Context, dataSliceDevice, mnt string) error {
 	}
 	for _, file := range filesToTouch {
 		if err := osutil.Touch(file); err != nil {
-			return fmt.Errorf("failed to touch %#q: %w", file, err)
+			return nil, fmt.Errorf("failed to touch %#q: %w", file, err)
 		}
 	}
 
@@ -150,10 +159,10 @@ fi
 exec /Volumes/cidata/lima-guestagent fake-cloud-init
 `
 	if err := os.MkdirAll(filepath.Join(mnt, "usr/local/sbin"), 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.WriteFile(filepath.Join(mnt, "usr/local/sbin/lima-macos-init.sh"), []byte(initSh), 0o755); err != nil {
-		return err
+		return nil, err
 	}
 
 	const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -176,7 +185,12 @@ exec /Volumes/cidata/lima-guestagent fake-cloud-init
 </plist>
 `
 	if err := os.WriteFile(filepath.Join(mnt, "Library/LaunchDaemons/io.lima-vm.lima-macos-init.plist"), []byte(plist), 0o755); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+
+	tccPaths, err := patchTCC(ctx, mnt, tccPerms)
+	if err != nil {
+		return nil, fmt.Errorf("failed to patch TCC database: %w", err)
+	}
+	return tccPaths, nil
 }

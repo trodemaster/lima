@@ -16,6 +16,7 @@ import (
 
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
+	"github.com/lima-vm/lima/v2/pkg/limayaml"
 )
 
 func TestWaitForStopped(t *testing.T) {
@@ -87,4 +88,41 @@ func TestValidateRejectsHostLoopbackFalseWithUserV2(t *testing.T) {
 	}
 	l := &LimaVzDriver{Instance: &limatype.Instance{Config: cfg}}
 	assert.ErrorContains(t, l.Validate(t.Context()), "not supported with a `user-v2` network")
+}
+
+func TestDarwinTCCPermissions(t *testing.T) {
+	const osOpts = `
+osOpts:
+  Darwin:
+    tccPermissions:
+    - preset: sshd-full-disk-access
+    - preset: lima-guestagent-full-disk-access
+`
+	load := func(t *testing.T, yaml string) *limatype.LimaYAML {
+		cfg, err := limayaml.Load(t.Context(), []byte(yaml), filepath.Join(t.TempDir(), "lima.yaml"))
+		assert.NilError(t, err)
+		return cfg
+	}
+
+	t.Run("Darwin guest", func(t *testing.T) {
+		perms, err := darwinTCCPermissions(load(t, "vmType: vz\nos: Darwin\n"+osOpts))
+		assert.NilError(t, err)
+		assert.DeepEqual(t, perms, []limatype.TCCPermission{
+			{Preset: "sshd-full-disk-access"},
+			{Preset: "lima-guestagent-full-disk-access"},
+		})
+	})
+	t.Run("Linux guest", func(t *testing.T) {
+		perms, err := darwinTCCPermissions(load(t, "vmType: vz\nos: Linux\n"+osOpts))
+		assert.NilError(t, err)
+		assert.Assert(t, perms == nil)
+	})
+	t.Run("unknown preset", func(t *testing.T) {
+		cfg := load(t, "vmType: vz\nos: Darwin\nosOpts:\n  Darwin:\n    tccPermissions:\n    - preset: no-such-preset\n")
+		_, err := darwinTCCPermissions(cfg)
+		assert.ErrorContains(t, err, `unknown TCC preset "no-such-preset"`)
+		// Configure, which deletion uses, must still succeed.
+		_, err = New().Configure(t.Context(), &limatype.Instance{Config: cfg, Dir: t.TempDir()})
+		assert.NilError(t, err)
+	})
 }

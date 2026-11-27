@@ -265,6 +265,11 @@ func (l *LimaVzDriver) Validate(_ context.Context) error {
 	if err := validateConfig(l.Instance.Config); err != nil {
 		return err
 	}
+	// Not in Configure: an instance created with a preset a later Lima no longer has
+	// must still be deletable.
+	if _, err := darwinTCCPermissions(l.Instance.Config); err != nil {
+		return err
+	}
 	if len(l.Instance.Config.BlockDevices) == 0 {
 		return nil
 	}
@@ -276,6 +281,22 @@ func (l *LimaVzDriver) Validate(_ context.Context) error {
 	// installed helper.
 	_, err = blockdevice.PrivilegedHelperPath(exe)
 	return err
+}
+
+// darwinTCCPermissions returns osOpts.Darwin.tccPermissions for a macOS guest, or nil
+// for other guests, and reports an unknown preset.
+func darwinTCCPermissions(cfg *limatype.LimaYAML) ([]limatype.TCCPermission, error) {
+	if cfg.OS == nil || *cfg.OS != limatype.DARWIN {
+		return nil, nil
+	}
+	var darwinOpts limatype.DarwinOpts
+	if err := limayaml.Convert(cfg.OsOpts[limatype.DARWIN], &darwinOpts, "osOpts.Darwin"); err != nil {
+		return nil, err
+	}
+	if err := macos.ValidateTCCPermissions(darwinOpts.TCCPermissions); err != nil {
+		return nil, fmt.Errorf("osOpts.Darwin.tccPermissions: %w", err)
+	}
+	return darwinOpts.TCCPermissions, nil
 }
 
 func validateConfig(cfg *limatype.LimaYAML) error {
@@ -413,7 +434,11 @@ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
 		patchedMarker := disk + ".patched" // empty file
 		if !osutil.FileExists(patchedMarker) {
 			logrus.Infof("Patching macOS disk %#q", disk)
-			if err := macos.Patch(ctx, disk); err != nil {
+			tccPerms, err := darwinTCCPermissions(l.Instance.Config)
+			if err != nil {
+				return err
+			}
+			if err := macos.Patch(ctx, disk, tccPerms); err != nil {
 				return err
 			}
 			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
