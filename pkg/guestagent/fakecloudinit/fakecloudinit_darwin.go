@@ -411,23 +411,33 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 		return fmt.Errorf("failed to execute command %v: %w (output=%#q)", cmd.Args, err, output)
 	}
 
+	if err := installUserFiles(u, uid, homedir, pw); err != nil {
+		return err
+	}
+	logrus.Infof("Created user %#q. The password is stored in %#q", u.Name, filepath.Join(homedir, "password"))
+	maybeEnableAutoLogin(ctx, mnt, u.Name, pw)
+	return nil
+}
+
+// installUserFiles writes the password file, SSH authorized keys and sudoers
+// entry for the user.
+func installUserFiles(u *cloudinittypes.User, uid int, homedir, pw string) error {
 	pwPath := filepath.Join(homedir, "password")
-	if err = os.WriteFile(pwPath, []byte(pw+"\n"), 0o400); err != nil {
+	if err := os.WriteFile(pwPath, []byte(pw+"\n"), 0o400); err != nil {
 		return fmt.Errorf("failed to write password file for user %#q: %w", u.Name, err)
 	}
-	logrus.Infof("Created user %#q. The password is stored in %#q", u.Name, pwPath)
 
 	dotSSHPath := filepath.Join(homedir, ".ssh")
-	if err = os.MkdirAll(dotSSHPath, 0o700); err != nil {
+	if err := os.MkdirAll(dotSSHPath, 0o700); err != nil {
 		return fmt.Errorf("failed to create .ssh directory for user %#q: %w", u.Name, err)
 	}
 	authKeysPath := filepath.Join(dotSSHPath, "authorized_keys")
 	authKeysContent := strings.Join(u.SSHAuthorizedKeys, "\n")
-	if err = os.WriteFile(authKeysPath, []byte(authKeysContent), 0o600); err != nil {
+	if err := os.WriteFile(authKeysPath, []byte(authKeysContent), 0o600); err != nil {
 		return fmt.Errorf("failed to write authorized_keys file for user %#q: %w", u.Name, err)
 	}
 	for _, f := range []string{pwPath, dotSSHPath, authKeysPath} {
-		if err = os.Chown(f, uid, -1); err != nil {
+		if err := os.Chown(f, uid, -1); err != nil {
 			return fmt.Errorf("failed to chown %#q for user %#q: %w", f, u.Name, err)
 		}
 	}
@@ -436,7 +446,6 @@ func createUser(ctx context.Context, u *cloudinittypes.User, mnt string) error {
 			return fmt.Errorf("failed to write sudoers file for user %#q: %w", u.Name, err)
 		}
 	}
-	maybeEnableAutoLogin(ctx, mnt, u.Name, pw)
 	return nil
 }
 
